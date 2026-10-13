@@ -7,8 +7,23 @@ and priority is depth. 🔥 **NOW** sits in the foreground, ⚡ **NEXT** in the 
 - warm window = done · cyan = in progress · violet = in review · **red blink = blocked** · dark = not started
 - rooftop beacon = health (🟢 healthy · 🟡 at risk · 🔴 blocked)
 
-Click a building to fly into it. Its tickets orbit the initiative core as **missions**, wired in
+Click a building to fly into it. Its work orbits the initiative core as **missions**, wired in
 by status (flowing = active, red dashes = blocked, solid = done).
+
+## How it works for the team
+
+- **Add work** (`A`): type what the work is. Press Enter to add it as a plain roadmap item, or
+  pick matching Tengu tickets from the list under the box to link them. A plain item can be linked
+  to a Tengu ticket later.
+- **Linked tickets** show their live status, assignee and due date from Tengu. Plain items have
+  a simple status (To do / In progress / Blocked / Done) and an owner.
+- **Reprioritize**: drag buildings between NOW / NEXT / LATER, or use the arrows in **List** view
+  (`2`), which ranks every initiative top to bottom.
+- **Saving**: in the published Artifact, every change is saved to its shared database and shows
+  up live for everyone with access. Viewers need **Contributor** (or Editor) access to make
+  changes; Viewers see a read-only roadmap. Run locally, it saves to this browser only and
+  starts with sample data.
+- Tengu is read-only from the roadmap. Removing or unlinking an item never changes the ticket.
 
 ## Run
 
@@ -16,25 +31,24 @@ by status (flowing = active, red dashes = blocked, solid = done).
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production build
+npm run build:artifact   # single-file page for publishing as a claude.ai Artifact
 ```
 
-Runs fully on mock data. Add `?chaos` to the URL to simulate Tengu write failures and try the retry flow.
+Locally it runs on sample data.
 
 ## Things to try
 
 - **Drag a building** to another district to reprioritize. Ticket priorities don't change.
 - **Hover** a building for its holo-card. **Scroll** to zoom, drag the ground to pan, double-click to recenter.
-- Inside an initiative: change a mission's status in the side panel (optimistic, then synced), **Link Tengu ticket**, **Unlink**.
-- **Timeline** (`T`): ships fly from *today* to their target month. Drag one to retarget it.
-- Every ~45s a simulated teammate moves a ticket in Tengu and HQ picks it up on the next sync.
+- **Timeline** (`3`): initiatives travel from *today* to their target month. Drag one to retarget it.
 
 | Key | Action |
 |---|---|
-| `/` | Search initiatives, Tengu tickets, people |
+| `/` | Search initiatives, work, people |
+| `A` | Add work |
 | `N` | New initiative |
-| `L` / `C` | Link / create Tengu ticket |
-| `S` | Sync now |
-| `T` | World ↔ Timeline |
+| `S` | Refresh from Tengu |
+| `1` `2` `3` | World · List · Timeline |
 | `Esc` | Close panel / go back |
 | `?` | Shortcuts |
 
@@ -46,15 +60,18 @@ src/
   components/
     world/        Isometric city: districts, buildings, camera, drag & drop
     initiative/   Initiative environment (constellation), new-initiative modal
-    tickets/      Mission cards, ticket panel, link & create modals
+    list/         Ranked List view
+    tickets/      Mission cards, item panel, Add work box
     timeline/     Timeline mode
     search/       "/" palette
     sync/         Sync indicator
     hud/          Top bar, quick actions, toasts, intro
   services/
-    tengu.ts      TenguAdapter interface + MockTenguAdapter
-    sync.ts       SyncEngine: polling pull, optimistic push, rollback, retry
-  lib/            roadmap.ts (zones, ordering, links) · progress.ts (progress, health)
+    roadmapStore.ts  Shared (Artifact db, live) or local (browser) saving
+    tengu.ts      TenguAdapter: McpTenguAdapter (viewer's connector) or MockTenguAdapter
+    sync.ts       SyncEngine: re-reads linked Tengu tickets on an interval
+    runtime.ts    Artifact capability access
+  lib/            roadmap.ts (zones, layout) · missions.ts (item + ticket → mission) · progress.ts (progress, health)
   types/          roadmap.ts (roadmap-owned) · tengu.ts (Tengu-owned)
   data/mock.ts    6 initiatives, ~40 FIJI-style tickets
 ```
@@ -63,16 +80,13 @@ The UI never calls Tengu or MCP directly. It goes through the store, then `SyncE
 `TenguAdapter`. See [docs/TENGU_INTEGRATION.md](docs/TENGU_INTEGRATION.md) for the capability
 inspection and the plan for a real integration.
 
-## Status
+## Data model
 
-| Phase | |
+Saved in the Artifact's database:
+
+| Path | What |
 |---|---|
-| 1 Product HQ world | ✅ |
-| 2 Initiative environments | ✅ |
-| 3 Ticket missions + detail panel | ✅ |
-| 4 Link / unlink tickets | ✅ (mock adapter) |
-| 5 Drag & drop strategic priority | ✅ |
-| 6 Timeline | ✅ |
-| 7 Tengu MCP | 🔎 Inspected & documented; adapter boundary ready, bridge not built |
-| 8 Two-way sync | ⚙️ Engine built (optimistic + polling) against the mock |
-| 9 Polish | ongoing |
+| `initiatives/{id}` | name, icon, place, priority, status, owner, target month, summary |
+| `layout/roadmap` | `{ now: [ids], next: [ids], later: [ids] }`, the ranking (one save per move) |
+| `items/{id}` | initiativeId, title, status, owner, optional `tengu: { id, key, url }` |
+| `settings/app` | `tenguBaseUrl` for "Open in Tengu" on relative links |

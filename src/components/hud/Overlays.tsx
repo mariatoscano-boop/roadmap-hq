@@ -15,11 +15,10 @@ export function Toasts() {
 
 const SHORTCUTS: [string, string][] = [
   ['/', 'Search'],
+  ['A', 'Add work'],
   ['N', 'New initiative'],
-  ['L', 'Link Tengu ticket'],
-  ['C', 'Create Tengu ticket'],
-  ['S', 'Sync with Tengu'],
-  ['T', 'Toggle World / Timeline'],
+  ['S', 'Refresh from Tengu'],
+  ['1 2 3', 'World · List · Timeline'],
   ['Esc', 'Close panel / go back'],
   ['?', 'This list'],
 ];
@@ -36,7 +35,6 @@ export function ShortcutsOverlay() {
           ))}
         </dl>
         <p className="fine">Scroll to zoom the world · drag the ground to pan · double-click to recenter.</p>
-        <button className="btn btn-ghost btn-sm" onClick={() => { actions.resetRoadmap(); actions.closeModal(); }}>Reset sample roadmap</button>
       </div>
     </div>
   );
@@ -51,6 +49,13 @@ export function SpotlightChip() {
       <button onClick={() => actions.setSpotlight(null)} aria-label="Clear spotlight">✕</button>
     </div>
   );
+}
+
+export function StatusBanner() {
+  const { state } = useStore();
+  const msg = state.dataError;
+  if (!msg) return null;
+  return <div className="status-banner" role="status">{msg}</div>;
 }
 
 export function Intro() {

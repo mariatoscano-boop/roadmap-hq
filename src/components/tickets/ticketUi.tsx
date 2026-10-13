@@ -1,4 +1,4 @@
-import type { StatusRole, TenguPriority, TenguTicket } from '../../types/tengu';
+import type { StatusRole, TenguPriority } from '../../types/tengu';
 
 export const ROLE_COLOR: Record<StatusRole, string> = {
   planning: '#7b84a3',
@@ -15,11 +15,11 @@ export const ROLE_COLOR: Record<StatusRole, string> = {
 
 export const PRIORITY_LABEL: Record<TenguPriority, string> = { 1: 'Urgent', 2: 'High', 3: 'Normal', 4: 'Low' };
 
-export function StatusPill({ ticket }: { ticket: TenguTicket }) {
+export function StatusPill({ role, label }: { role: StatusRole; label: string }) {
   return (
-    <span className={`status-pill role-${ticket.statusRole}`} style={{ ['--c' as string]: ROLE_COLOR[ticket.statusRole] }}>
+    <span className={`status-pill role-${role}`} style={{ ['--c' as string]: ROLE_COLOR[role] }}>
       <i />
-      {ticket.status}
+      {label}
     </span>
   );
 }
@@ -46,7 +46,7 @@ export function Avatar({ name, size = 22 }: { name: string | null; size?: number
 
 export function formatDue(date: string | null) {
   if (!date) return null;
-  const d = new Date(date + 'T12:00:00');
+  const d = new Date(date.slice(0, 10) + 'T12:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 

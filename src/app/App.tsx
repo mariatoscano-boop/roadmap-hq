@@ -1,13 +1,14 @@
 import { useEffect } from 'react';
 import { InitiativeView } from '../components/initiative/InitiativeView';
 import { NewInitiativeModal } from '../components/initiative/NewInitiativeModal';
-import { Intro, ShortcutsOverlay, SpotlightChip, Toasts } from '../components/hud/Overlays';
+import { Intro, ShortcutsOverlay, SpotlightChip, StatusBanner, Toasts } from '../components/hud/Overlays';
 import { QuickActions } from '../components/hud/QuickActions';
+import { SettingsModal } from '../components/hud/SettingsModal';
 import { TopBar } from '../components/hud/TopBar';
+import { ListView } from '../components/list/ListView';
 import { SearchPalette } from '../components/search/SearchPalette';
-import { CreateTicketModal } from '../components/tickets/CreateTicketModal';
-import { LinkTicketsModal } from '../components/tickets/LinkTicketsModal';
-import { TicketPanel } from '../components/tickets/TicketPanel';
+import { AddWorkModal } from '../components/tickets/AddWorkModal';
+import { ItemPanel } from '../components/tickets/ItemPanel';
 import { Timeline } from '../components/timeline/Timeline';
 import { World } from '../components/world/World';
 import { useStore } from './store';
@@ -20,24 +21,26 @@ function useShortcuts() {
       const typing = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
       if (e.key === 'Escape') {
         if (state.modal) return actions.closeModal();
-        if (state.activeTicket) return actions.openTicket(null);
+        if (state.activeItem) return actions.openItem(null);
         if (state.activeInitiative) return actions.enterInitiative(null);
         if (state.spotlight) return actions.setSpotlight(null);
         return;
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey || state.modal) return;
       const k = e.key.toLowerCase();
+      const go = (mode: 'world' | 'list' | 'timeline') => { actions.enterInitiative(null); actions.setMode(mode); };
       if (e.key === '/') { e.preventDefault(); actions.openModal('search'); }
       else if (e.key === '?') actions.openModal('shortcuts');
-      else if (k === 'n') { e.preventDefault(); actions.openModal('new-initiative'); }
-      else if (k === 'l') actions.openModal('link', state.activeInitiative);
-      else if (k === 'c') { e.preventDefault(); actions.openModal('create', state.activeInitiative); }
+      else if (k === 'a' && state.canEdit) { e.preventDefault(); actions.openModal('add', state.activeInitiative); }
+      else if (k === 'n' && state.canEdit) { e.preventDefault(); actions.openModal('new-initiative'); }
       else if (k === 's') void actions.syncNow();
-      else if (k === 't') { actions.enterInitiative(null); actions.setMode(state.mode === 'world' ? 'timeline' : 'world'); }
+      else if (k === '1') go('world');
+      else if (k === '2') go('list');
+      else if (k === '3') go('timeline');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state.modal, state.activeTicket, state.activeInitiative, state.spotlight, state.mode, actions]);
+  }, [state.modal, state.activeItem, state.activeInitiative, state.spotlight, state.canEdit, actions]);
 }
 
 export function App() {
@@ -47,17 +50,20 @@ export function App() {
     <div className="app">
       <TopBar />
       <main className="stage">
-        {state.mode === 'world' ? <World /> : <Timeline />}
+        {!state.ready ? (
+          <div className="loading" role="status">Opening Product HQ…</div>
+        ) : state.mode === 'world' ? <World /> : state.activeInitiative ? null : state.mode === 'list' ? <ListView /> : <Timeline />}
         {state.activeInitiative && <InitiativeView key={state.activeInitiative} />}
       </main>
+      <StatusBanner />
       <SpotlightChip />
-      <TicketPanel />
-      {!state.activeTicket && <QuickActions />}
+      <ItemPanel />
+      {!state.activeItem && state.canEdit && <QuickActions />}
       <Toasts />
       {state.modal === 'search' && <SearchPalette />}
-      {state.modal === 'link' && <LinkTicketsModal />}
-      {state.modal === 'create' && <CreateTicketModal />}
+      {(state.modal === 'add' || state.modal === 'link-item') && <AddWorkModal key={`${state.modal}-${state.modalTarget}`} />}
       {state.modal === 'new-initiative' && <NewInitiativeModal />}
+      {state.modal === 'settings' && <SettingsModal />}
       {state.modal === 'shortcuts' && <ShortcutsOverlay />}
       <Intro />
     </div>

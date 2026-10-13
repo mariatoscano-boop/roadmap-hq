@@ -1,4 +1,4 @@
-import type { Initiative, Links, Zone } from '../types/roadmap';
+import type { Initiative, RoadmapLayout, Zone } from '../types/roadmap';
 
 export const ZONES: Zone[] = ['now', 'next', 'later'];
 
@@ -12,8 +12,24 @@ export function byZone(initiatives: Initiative[], zone: Zone): Initiative[] {
   return initiatives.filter((i) => i.zone === zone).sort((a, b) => a.order - b.order);
 }
 
+/** Apply the shared layout to initiatives: zone + order come from it, unknown ones go last in their stored zone. */
+export function applyLayout(initiatives: Initiative[], layout: RoadmapLayout | null): Initiative[] {
+  const pos = new Map<string, { zone: Zone; order: number }>();
+  if (layout) for (const z of ZONES) (layout[z] ?? []).forEach((id, order) => !pos.has(id) && pos.set(id, { zone: z, order }));
+  return initiatives.map((i) => {
+    const p = pos.get(i.id);
+    return p ? { ...i, ...p } : { ...i, order: 1000 + (i.order ?? 0) };
+  });
+}
+
+export function layoutOf(initiatives: Initiative[]): RoadmapLayout {
+  const out = {} as RoadmapLayout;
+  for (const z of ZONES) out[z] = byZone(initiatives, z).map((i) => i.id);
+  return out;
+}
+
 /**
- * Moves an initiative into `zone` at position `index` and renumbers both zones.
+ * Moves an initiative into `zone` at position `index` and renumbers every zone.
  * Only roadmap ordering changes — linked Tengu tickets are untouched.
  */
 export function moveInitiative(initiatives: Initiative[], id: string, zone: Zone, index: number): Initiative[] {
@@ -26,19 +42,6 @@ export function moveInitiative(initiatives: Initiative[], id: string, zone: Zone
     list.forEach((i, order) => result.set(i.id, { ...i, zone: z, order }));
   }
   return initiatives.map((i) => result.get(i.id)!);
-}
-
-export function linkTickets(links: Links, initiativeId: string, ticketIds: string[]): Links {
-  const current = links[initiativeId] ?? [];
-  return { ...links, [initiativeId]: [...current, ...ticketIds.filter((t) => !current.includes(t))] };
-}
-
-export function unlinkTicket(links: Links, initiativeId: string, ticketId: string): Links {
-  return { ...links, [initiativeId]: (links[initiativeId] ?? []).filter((t) => t !== ticketId) };
-}
-
-export function initiativesForTicket(links: Links, ticketId: string): string[] {
-  return Object.keys(links).filter((id) => links[id].includes(ticketId));
 }
 
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -58,4 +61,9 @@ export function addMonths(target: string, delta: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+export function currentMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;

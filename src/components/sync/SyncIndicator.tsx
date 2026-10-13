@@ -2,54 +2,61 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../app/store';
 
 function ago(ts: number | null) {
-  if (!ts) return 'never';
+  if (!ts) return '';
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s} seconds ago`;
-  const m = Math.round(s / 60);
-  return `${m} min${m > 1 ? 's' : ''} ago`;
+  if (s < 10) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  return `${Math.round(s / 60)}m ago`;
 }
 
+/** One pill for both kinds of sync: roadmap changes being saved, and live data from Tengu. */
 export function SyncIndicator() {
   const { state, actions } = useStore();
   const { status, lastSyncedAt, error } = state.sync;
   const [, tick] = useState(0);
   const [flash, setFlash] = useState(false);
-  const prev = useRef(status);
+  const prevSaving = useRef(state.saving);
 
   useEffect(() => {
-    const h = window.setInterval(() => tick((x) => x + 1), 1000);
+    const h = window.setInterval(() => tick((x) => x + 1), 5000);
     return () => window.clearInterval(h);
   }, []);
 
   useEffect(() => {
-    if (prev.current === 'syncing' && status === 'synced') {
+    if (prevSaving.current > 0 && state.saving === 0 && !state.saveError) {
       setFlash(true);
-      const h = window.setTimeout(() => setFlash(false), 1200);
-      prev.current = status;
+      const h = window.setTimeout(() => setFlash(false), 1400);
+      prevSaving.current = state.saving;
       return () => window.clearTimeout(h);
     }
-    prev.current = status;
-  }, [status]);
+    prevSaving.current = state.saving;
+  }, [state.saving, state.saveError]);
 
+  const where = state.storeKind === 'shared' ? 'Saved for everyone with access' : 'Saved in this browser';
+
+  if (state.saving > 0) {
+    return <span className="sync sync-busy" aria-live="polite"><i className="spin">↻</i> Saving…</span>;
+  }
+  if (state.saveError && state.saveError !== 'View only') {
+    return <span className="sync sync-error" title={state.saveError}>⚠ Not saved</span>;
+  }
   if (status === 'error') {
     return (
-      <button className="sync sync-error" onClick={() => void actions.retrySync()} title={error ?? undefined}>
-        ⚠ Sync failed — <u>Retry</u>
+      <button className="sync sync-error" onClick={() => void actions.syncNow()} title={error ?? undefined}>
+        ⚠ Tengu unavailable — <u>Retry</u>
       </button>
     );
   }
-  if (status === 'syncing' || status === 'idle') {
-    return (
-      <span className="sync sync-busy" aria-live="polite">
-        <i className="spin">↻</i> Syncing…
-      </span>
-    );
-  }
+  const linked = state.items.some((i) => i.tengu);
   return (
-    <button className={`sync sync-ok ${flash ? 'is-flash' : ''}`} onClick={() => void actions.syncNow()} title="Sync with Tengu (S)" aria-live="polite">
-      <i className="sync-dot" />
-      {flash ? 'Synced ✓' : `Synced ${ago(lastSyncedAt)}`}
+    <button
+      className={`sync sync-ok ${flash ? 'is-flash' : ''}`}
+      onClick={() => void actions.syncNow()}
+      title={`${where}. ${linked ? `Tengu checked ${ago(lastSyncedAt) || 'soon'}. Click to refresh (S).` : ''}`}
+      aria-live="polite"
+    >
+      {status === 'syncing' ? <i className="spin">↻</i> : <i className="sync-dot" />}
+      {flash ? 'Saved ✓' : status === 'syncing' ? 'Checking Tengu…' : linked && lastSyncedAt ? `Saved · Tengu ${ago(lastSyncedAt)}` : 'All changes saved'}
     </button>
   );
 }

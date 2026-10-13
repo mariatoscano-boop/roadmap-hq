@@ -1,4 +1,4 @@
-import type { Initiative, Links } from '../types/roadmap';
+import type { Initiative, RoadmapItem } from '../types/roadmap';
 import type { StatusRole, TenguComment, TenguList, TenguMember, TenguPriority, TenguTicket } from '../types/tengu';
 
 /** Mirrors the status set of the real Fiji lists in Tengu. */
@@ -159,13 +159,31 @@ export const MOCK_INITIATIVES: Initiative[] = [
     summary: 'Postgres 16, a new queue and tracing everywhere — the foundation for 2027.' },
 ];
 
-const keys = (...n: number[]) => n.map((x) => `tk-${x}`);
-
-export const MOCK_LINKS: Links = {
-  'ini-mkt': keys(142, 156, 161, 173, 175, 178, 179),
-  'ini-ai': keys(201, 204, 207, 209, 212, 214, 216, 218),
-  'ini-ins': keys(231, 233, 236, 238, 239),
-  'ini-dash': keys(251, 253, 255, 257, 259),
-  'ini-buyer': keys(271, 273, 275, 277),
-  'ini-plat': keys(301, 303, 305, 307),
+const LINKS: Record<string, number[]> = {
+  'ini-mkt': [142, 156, 161, 173, 175, 178, 179],
+  'ini-ai': [201, 204, 207, 209, 212, 214, 216, 218],
+  'ini-ins': [231, 233, 236, 238, 239],
+  'ini-dash': [251, 253, 255, 257, 259],
+  'ini-buyer': [271, 273, 275, 277],
+  'ini-plat': [301, 303, 305, 307],
 };
+
+/** Sample roadmap items for local mode: mostly linked to mock Tengu tickets, plus a few plain ones. */
+export const MOCK_ITEMS: RoadmapItem[] = [
+  ...Object.entries(LINKS).flatMap(([initiativeId, nums]) =>
+    nums.map((n, i): RoadmapItem => {
+      const t = MOCK_TICKETS.find((x) => x.id === `tk-${n}`)!;
+      return {
+        id: `item-${n}`,
+        initiativeId,
+        title: t.title,
+        status: 'todo',
+        owner: null,
+        tengu: { id: t.id, key: t.key, url: t.url },
+        createdAt: new Date(Date.UTC(2026, 8, 1 + i)).toISOString(),
+      };
+    }),
+  ),
+  { id: 'item-p1', initiativeId: 'ini-mkt', title: 'Pricing page copy review with marketing', status: 'doing', owner: 'Natalia', tengu: null, createdAt: '2026-10-01T10:00:00Z' },
+  { id: 'item-p2', initiativeId: 'ini-plat', title: 'Decide on queue vendor', status: 'todo', owner: 'Iván', tengu: null, createdAt: '2026-10-02T10:00:00Z' },
+];

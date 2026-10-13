@@ -1,5 +1,5 @@
-import type { Health, Initiative } from '../../types/roadmap';
-import type { StatusRole, TenguTicket } from '../../types/tengu';
+import type { Health, Initiative, Mission } from '../../types/roadmap';
+import type { StatusRole } from '../../types/tengu';
 
 export const W = 46; // footprint half-width
 export const D = 23; // footprint half-depth
@@ -39,17 +39,17 @@ const pts = (p: [number, number][]) => p.map(([x, y]) => `${x.toFixed(1)},${y.to
 
 interface Props {
   initiative: Initiative;
-  tickets: TenguTicket[];
+  missions: Mission[];
   health: Health;
-  /** Ticket ids that just changed remotely — their floors flash. */
+  /** Item ids that just changed in Tengu — their floors flash. */
   pulse?: Set<string>;
   className?: string;
 }
 
-export function Building({ initiative, tickets, health, pulse, className }: Props) {
-  const sorted = [...tickets]
-    .filter((t) => t.statusRole !== 'closed')
-    .sort((a, b) => FLOOR_ORDER.indexOf(a.statusRole) - FLOOR_ORDER.indexOf(b.statusRole))
+export function Building({ initiative, missions, health, pulse, className }: Props) {
+  const sorted = [...missions]
+    .filter((t) => t.role !== 'closed')
+    .sort((a, b) => FLOOR_ORDER.indexOf(a.role) - FLOOR_ORDER.indexOf(b.role))
     .slice(0, MAX_FLOORS);
   const floors = Math.max(3, sorted.length);
   const H = buildingHeight(sorted.length);
@@ -71,7 +71,7 @@ export function Building({ initiative, tickets, health, pulse, className }: Prop
     const t = sorted[k];
     const b = LOBBY + k * F + 2;
     const top = b + F - 4;
-    const cls = windowClass(t?.statusRole) + (t && pulse?.has(t.id) ? ' win-pulse' : '');
+    const cls = windowClass(t?.role) + (t && pulse?.has(t.id) ? ' win-pulse' : '');
     for (const [u0, u1] of cols) {
       windows.push(
         <polygon key={`l${k}${u0}`} className={cls} points={pts([[lx(u0), ly(u0) - b], [lx(u1), ly(u1) - b], [lx(u1), ly(u1) - top], [lx(u0), ly(u0) - top]])} />,

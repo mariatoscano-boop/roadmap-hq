@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { useStore } from '../../app/store';
-import { addMonths, monthLabel, ZONE_META, ZONES } from '../../lib/roadmap';
+import { addMonths, currentMonth, monthLabel, ZONE_META, ZONES } from '../../lib/roadmap';
 import type { StrategicPriority, Zone } from '../../types/roadmap';
 
 const ICONS = ['✨', '🛰', '🧪', '💳', '🔒', '📦', '🎯', '🌐', '⚙️', '📱'];
 
 export function NewInitiativeModal() {
-  const { state, actions } = useStore();
+  const { actions } = useStore();
   const [name, setName] = useState('');
   const [icon, setIcon] = useState(ICONS[0]);
   const [place, setPlace] = useState('');
   const [zone, setZone] = useState<Zone>('next');
   const [priority, setPriority] = useState<StrategicPriority>('P1');
-  const [owner, setOwner] = useState(state.members[0]?.name ?? '');
-  const [target, setTarget] = useState('2026-12');
+  const [owner, setOwner] = useState('');
+  const [target, setTarget] = useState(addMonths(currentMonth(), 2));
   const [summary, setSummary] = useState('');
-  const months = Array.from({ length: 9 }, (_, i) => addMonths('2026-10', i));
+  const months = Array.from({ length: 12 }, (_, i) => addMonths(currentMonth(), i));
 
   const submit = () => {
     if (!name.trim()) return;
@@ -38,7 +38,7 @@ export function NewInitiativeModal() {
   return (
     <div className="modal-scrim" onMouseDown={actions.closeModal}>
       <form className="modal modal-form" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} aria-label="New initiative">
-        <header className="modal-head"><h3>New initiative</h3><span className="muted small">Breaks ground in Product HQ</span></header>
+        <header className="modal-head"><h3>New initiative</h3><span className="muted small">A new building in Product HQ</span></header>
         <div className="icon-pick">
           {ICONS.map((i) => (
             <button type="button" key={i} className={i === icon ? 'on' : ''} onClick={() => setIcon(i)} aria-label={`Icon ${i}`}>{i}</button>
@@ -61,9 +61,7 @@ export function NewInitiativeModal() {
             </select>
           </label>
           <label className="field"><span>Owner</span>
-            <select value={owner} onChange={(e) => setOwner(e.target.value)}>
-              {state.members.map((m) => <option key={m.id}>{m.name}</option>)}
-            </select>
+            <input id="ini-owner" placeholder="Name" value={owner} onChange={(e) => setOwner(e.target.value)} />
           </label>
           <label className="field"><span>Target</span>
             <select value={target} onChange={(e) => setTarget(e.target.value)}>
@@ -74,7 +72,7 @@ export function NewInitiativeModal() {
         <footer className="modal-foot">
           <span className="grow" />
           <button type="button" className="btn btn-ghost" onClick={actions.closeModal}>Cancel</button>
-          <button className="btn btn-primary" disabled={!name.trim()}>Break ground</button>
+          <button className="btn btn-primary" disabled={!name.trim()}>Create initiative</button>
         </footer>
       </form>
     </div>

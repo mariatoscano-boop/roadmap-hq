@@ -52,6 +52,7 @@ export interface TenguTicket {
   title: string;
   description: string;
   listId: string;
+  listName?: string;
   status: string;
   statusRole: StatusRole;
   priority: TenguPriority | null;
@@ -61,23 +62,7 @@ export interface TenguTicket {
   updatedAt: string;
   /** Comments — only present after getTicket(). */
   comments?: TenguComment[];
+  /** True for search hits whose status hasn't been loaded yet. */
+  partial?: boolean;
 }
 
-/** The subset of a ticket the roadmap is allowed to write back to Tengu (mirrors update_task). */
-export interface TenguTicketUpdate {
-  name?: string;
-  status?: string;
-  priority?: TenguPriority | null;
-  assignee?: string | null;
-  dueDate?: string | null;
-  description?: string;
-}
-
-export interface TenguTicketDraft {
-  listId: string;
-  name: string;
-  description?: string;
-  priority?: TenguPriority;
-  assignee?: string;
-  dueDate?: string;
-}

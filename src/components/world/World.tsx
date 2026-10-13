@@ -72,9 +72,9 @@ export function World() {
 
   const zones = useMemo(() => {
     const out = {} as Record<Zone, InitiativeView[]>;
-    for (const z of ZONES) out[z] = byZone(state.roadmap.initiatives, z).map((i) => views[i.id]).filter(Boolean);
+    for (const z of ZONES) out[z] = byZone(state.initiatives, z).map((i) => views[i.id]).filter(Boolean);
     return out;
-  }, [state.roadmap.initiatives, views]);
+  }, [state.initiatives, views]);
 
   // Fit world to viewport.
   useLayoutEffect(() => {
@@ -130,7 +130,7 @@ export function World() {
   };
 
   const enter = (id: string) => {
-    const zone = state.roadmap.initiatives.find((i) => i.id === id)!.zone;
+    const zone = state.initiatives.find((i) => i.id === id)!.zone;
     const idx = zones[zone].findIndex((v) => v.initiative.id === id);
     const lot = lots(zone, zones[zone].length)[idx];
     const r = viewport.current!.getBoundingClientRect();
@@ -178,6 +178,7 @@ export function World() {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
+    if (!state.canEdit) return enter(id);
     const { wx, wy } = toWorld(e.clientX, e.clientY);
     setDrag({ id, wx, wy, active: false, startX: e.clientX, startY: e.clientY, zone: null, index: 0 });
   };
@@ -304,7 +305,7 @@ export function World() {
           <div className="drag-ghost" style={{ left: dragging.wx, top: dragging.wy + 30 }}>
             <Building
               initiative={views[dragging.id].initiative}
-              tickets={views[dragging.id].tickets}
+              missions={views[dragging.id].missions}
               health={views[dragging.id].stats.health}
             />
           </div>
@@ -316,7 +317,16 @@ export function World() {
         <button onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out">−</button>
         <button onClick={() => { setAnimating(!reduced); setCam(fit); }} aria-label="Reset view">⌂</button>
       </div>
-      <div className="world-hint">Click a building to enter · drag it between districts to reprioritize</div>
+      <div className="world-hint">
+        {state.canEdit ? 'Click a building to see its work · drag it between NOW, NEXT and LATER to reprioritize' : 'Click a building to see its work'}
+      </div>
+      {state.ready && state.initiatives.length === 0 && (
+        <div className="world-empty" onPointerDown={(e) => e.stopPropagation()}>
+          <h2>No initiatives yet</h2>
+          <p>Each initiative becomes a building. Put the most important ones in NOW.</p>
+          {state.canEdit && <button className="btn btn-primary" onClick={() => actions.openModal('new-initiative')}>+ New initiative</button>}
+        </div>
+      )}
     </div>
   );
 }
@@ -393,9 +403,9 @@ interface LotProps {
 }
 
 function Lot({ view, x, y, scale, delay, hovered, selected, dimmed, pulse, onHover, onPointerDown, onKeyEnter }: LotProps) {
-  const { initiative: ini, stats, tickets } = view;
+  const { initiative: ini, stats, missions } = view;
   const now = Date.now();
-  const pulsing = new Set(tickets.filter((t) => pulse[t.id] && now - pulse[t.id] < 6000).map((t) => t.id));
+  const pulsing = new Set(missions.filter((m) => pulse[m.id] && now - pulse[m.id] < 6000).map((m) => m.id));
   const h = buildingHeight(stats.total);
   return (
     <div
@@ -421,9 +431,10 @@ function Lot({ view, x, y, scale, delay, hovered, selected, dimmed, pulse, onHov
         }}
       />
       <div className="lot-rise">
-        <Building initiative={ini} tickets={tickets} health={stats.health} pulse={pulsing} />
+        <Building initiative={ini} missions={missions} health={stats.health} pulse={pulsing} />
         <div className="nameplate" style={{ top: -(h + D + 64) }}>
           <div className="nameplate-row">
+            {ini.zone === 'now' && <span className="rank" title="Priority order in NOW">#{ini.order + 1}</span>}
             <span className="nameplate-icon">{ini.icon}</span>
             <span className="nameplate-name">{ini.name}</span>
             <span className={`prio prio-${ini.priority}`}>{ini.priority}</span>
@@ -434,7 +445,7 @@ function Lot({ view, x, y, scale, delay, hovered, selected, dimmed, pulse, onHov
           <div className="nameplate-meta">
             <span>{stats.progress}%</span>
             <span className="dot" style={{ background: HEALTH_COLOR[stats.health] }} />
-            <span>{stats.total} tickets</span>
+            <span>{stats.total === 0 ? 'no items yet' : `${stats.total} items`}</span>
             {stats.blocked > 0 && <span className="meta-blocked">{stats.blocked} blocked</span>}
           </div>
         </div>
@@ -461,7 +472,7 @@ function Lot({ view, x, y, scale, delay, hovered, selected, dimmed, pulse, onHov
               {stats.unassigned > 0 && <span className="flag">{stats.unassigned} unassigned</span>}
             </div>
           )}
-          <div className="holo-hint">Click to enter ↵</div>
+          <div className="holo-hint">{stats.total === 0 ? 'Click to add work ↵' : 'Click to enter ↵'}</div>
         </div>
       )}
     </div>

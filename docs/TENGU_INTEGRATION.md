@@ -61,26 +61,21 @@ Edits from the ticket panel go through `TenguAdapter.updateTicket` optimisticall
 roll back and the sync pill shows **⚠ Sync failed — Retry**. (Try `?chaos` in the URL to simulate
 failures.)
 
-## Phase 7/8 plan
+## How the published page talks to Tengu
 
-The UI only talks to `TenguAdapter` (`src/services/tengu.ts`). Today that's `MockTenguAdapter`.
-A browser can't speak MCP with user credentials, so the real implementation should be a small
-**server-side bridge**:
+The page runs as a claude.ai Artifact and declares the `mcp` capability for the **Tengu OS**
+connector with three read tools: `get_task`, `list_tasks` and `search`. Each viewer's calls run
+with **their own** Tengu connection. The page never holds a token, and nobody needs a backend.
+The first time someone opens the page, claude.ai asks them to allow Tengu for it.
 
-```
-Browser ──(HTTP, same shape as TenguAdapter)──▶ HQ bridge ──(MCP client)──▶ Tengu_OS
-```
+- **Add work** searches with `list_tasks { text, limit: 20 }`, which returns status and assignee.
+  It also calls `search`, which covers more lists but returns only id, title and url.
+- Linked tickets are refreshed with `get_task` every 90 seconds (Tengu has no webhooks).
+- The page doesn't write to Tengu. "Open in Tengu" uses the ticket's `url`. Tengu returns relative
+  urls (`/tasks/…`) for its own lists, so the page joins them to the web address set in Settings.
+- Errors map to clear messages: not connected, reconnect needed, access turned off for the page,
+  or Tengu unavailable. Plain roadmap items keep working without Tengu.
+- Not verified yet: the shape of `get_task` comments. No ticket had any during development, so
+  the page reads them defensively.
 
-- `GET  /tengu/lists` → `list_lists`
-- `GET  /tengu/tickets?since=` → `list_tasks` (page through each list, `limit: 100`)
-- `GET  /tengu/tickets/:id` → `get_task`
-- `GET  /tengu/search?q=` → `search` (+ `list_tasks { text }` for status/assignee)
-- `PATCH /tengu/tickets/:id` → `update_task`
-- `POST /tengu/tickets` → `create_task`
-
-These routes belong to the bridge we would build. They aren't Tengu endpoints. Then add an
-`HttpTenguAdapter` and choose it in `createTenguAdapter()`. Nothing in the UI changes.
-
-Open questions for Phase 7: where the bridge runs and how it gets its MCP connection (a service
-account key vs. the signed-in user's), and whether to persist roadmap state (initiatives + links)
-server-side rather than in `localStorage`.
+Outside an Artifact (local dev), the app falls back to `MockTenguAdapter` sample data.

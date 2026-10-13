@@ -14,10 +14,9 @@ export function QuickActions() {
   }, [open]);
 
   const items = [
-    { label: 'New Initiative', key: 'N', run: () => actions.openModal('new-initiative') },
-    { label: 'Link Tengu Ticket', key: 'L', run: () => actions.openModal('link', state.activeInitiative) },
-    { label: 'Create Tengu Ticket', key: 'C', run: () => actions.openModal('create', state.activeInitiative) },
-    { label: 'Sync Now', key: 'S', run: () => void actions.syncNow() },
+    { label: 'Add work', key: 'A', run: () => actions.openModal('add', state.activeInitiative) },
+    { label: 'New initiative', key: 'N', run: () => actions.openModal('new-initiative') },
+    { label: 'Refresh from Tengu', key: 'S', run: () => void actions.syncNow() },
   ];
 
   return (

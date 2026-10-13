@@ -1,11 +1,9 @@
 /**
- * SyncEngine — keeps a local cache of Tengu tickets fresh and pushes Tengu-owned edits back.
- *
- * - Pull: Tengu has no webhooks/realtime, so we poll `getTickets({ since })` on an interval.
- * - Push: edits are applied optimistically; on failure they roll back and stay queued for Retry.
+ * SyncEngine — keeps the live Tengu data for linked items fresh.
+ * Tengu has no webhooks or realtime events, so linked tickets are re-read on an interval.
  */
 import type { TenguAdapter } from './tengu';
-import type { TenguTicket, TenguTicketUpdate } from '../types/tengu';
+import type { TenguTicket } from '../types/tengu';
 
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
 
@@ -13,97 +11,67 @@ export interface SyncSnapshot {
   status: SyncStatus;
   lastSyncedAt: number | null;
   error: string | null;
-  failedOps: number;
-}
-
-interface PendingUpdate {
-  ticketId: string;
-  updates: TenguTicketUpdate;
-  previous: TenguTicket;
+  /** Linked tickets that couldn't be read (deleted, or not visible to this viewer). */
+  missing: number;
 }
 
 export interface SyncCallbacks {
-  /** Tickets fetched from Tengu (full or incremental). */
-  onTickets(tickets: TenguTicket[], opts: { full: boolean }): void;
-  /** Tickets changed remotely by someone else since the last pull. */
+  onTickets(tickets: TenguTicket[]): void;
+  /** Tickets whose status changed in Tengu since the previous read. */
   onRemoteChanges(tickets: TenguTicket[]): void;
   onState(snapshot: SyncSnapshot): void;
 }
 
 export class SyncEngine {
-  private snapshot: SyncSnapshot = { status: 'idle', lastSyncedAt: null, error: null, failedOps: 0 };
-  private cursor: string | null = null;
-  private failed: PendingUpdate[] = [];
-  private inflight = 0;
+  private snapshot: SyncSnapshot = { status: 'idle', lastSyncedAt: null, error: null, missing: 0 };
   private timer: number | null = null;
-  /** Tickets we just wrote — don't announce our own changes as remote ones. */
-  private recentlyPushed = new Set<string>();
+  private known = new Map<string, string>();
+  private ids: string[] = [];
+  private running: Promise<void> | null = null;
 
-  constructor(private adapter: TenguAdapter, private cb: SyncCallbacks, private intervalMs = 30_000) {}
+  constructor(private adapter: TenguAdapter, private cb: SyncCallbacks, private intervalMs = 60_000) {}
 
   start() {
-    void this.pull(true);
-    this.timer = window.setInterval(() => void this.pull(false), this.intervalMs);
+    this.timer = window.setInterval(() => void this.pull(), this.intervalMs);
   }
 
   stop() {
     if (this.timer) window.clearInterval(this.timer);
   }
 
+  /** Which tickets to keep fresh. New ids are fetched right away. */
+  setIds(ids: string[]) {
+    const fresh = ids.filter((id) => !this.ids.includes(id));
+    this.ids = ids;
+    if (fresh.length) void this.pull(fresh);
+  }
+
   private set(p: Partial<SyncSnapshot>) {
-    this.snapshot = { ...this.snapshot, ...p, failedOps: this.failed.length };
+    this.snapshot = { ...this.snapshot, ...p };
     this.cb.onState(this.snapshot);
   }
 
-  private begin() {
-    this.inflight++;
-    this.set({ status: 'syncing' });
-  }
-
-  private end(error?: string) {
-    this.inflight = Math.max(0, this.inflight - 1);
-    if (error) return this.set({ status: 'error', error });
-    if (this.inflight === 0) this.set({ status: this.failed.length ? 'error' : 'synced', lastSyncedAt: Date.now(), error: this.failed.length ? this.snapshot.error : null });
-  }
-
-  async pull(full = false) {
-    this.begin();
-    try {
-      const startedAt = new Date().toISOString();
-      const tickets = await this.adapter.getTickets(full || !this.cursor ? {} : { since: this.cursor });
-      this.cursor = startedAt;
-      this.cb.onTickets(tickets, { full });
-      const remote = full ? [] : tickets.filter((t) => !this.recentlyPushed.has(t.id));
-      if (remote.length) this.cb.onRemoteChanges(remote);
-      this.recentlyPushed.clear();
-      this.end();
-    } catch (e) {
-      this.end((e as Error).message || 'Sync failed');
+  async pull(only?: string[]): Promise<void> {
+    if (this.running && !only) return this.running;
+    const ids = only ?? this.ids;
+    if (!ids.length) {
+      this.set({ status: 'synced', lastSyncedAt: Date.now(), error: null });
+      return;
     }
-  }
-
-  /** Push an update to Tengu. The caller has already applied it optimistically. */
-  async push(ticketId: string, updates: TenguTicketUpdate, previous: TenguTicket): Promise<TenguTicket | null> {
-    this.begin();
-    try {
-      const fresh = await this.adapter.updateTicket(ticketId, updates);
-      this.recentlyPushed.add(ticketId);
-      this.cb.onTickets([fresh], { full: false });
-      this.end();
-      return fresh;
-    } catch (e) {
-      // Roll back, keep for retry.
-      this.failed.push({ ticketId, updates, previous });
-      this.cb.onTickets([previous], { full: false });
-      this.end((e as Error).message || 'Sync failed');
-      return null;
-    }
-  }
-
-  async retry() {
-    const ops = this.failed.splice(0);
-    this.set({ error: null });
-    if (!ops.length) return this.pull(false);
-    for (const op of ops) await this.push(op.ticketId, op.updates, op.previous);
+    const run = (async () => {
+      this.set({ status: 'syncing' });
+      try {
+        const { tickets, failed } = await this.adapter.getTicketsByIds(ids);
+        this.cb.onTickets(tickets);
+        const changed = tickets.filter((t) => this.known.has(t.id) && this.known.get(t.id) !== t.status);
+        for (const t of tickets) this.known.set(t.id, t.status);
+        if (changed.length) this.cb.onRemoteChanges(changed);
+        this.set({ status: 'synced', lastSyncedAt: Date.now(), error: null, missing: only ? this.snapshot.missing : failed.length });
+      } catch (e) {
+        this.set({ status: 'error', error: (e as Error).message || 'Couldn’t reach Tengu.' });
+      }
+    })();
+    if (!only) this.running = run.finally(() => (this.running = null));
+    return run;
   }
 }
