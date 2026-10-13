@@ -100,7 +100,28 @@ offers the fix.
 These appear as a banner under the top bar, in Add work, in the item panel and in Settings.
 Plain roadmap items keep working in every state.
 
+## Shared copy (for viewers who can't reach Tengu)
+
+Some viewers' pages can't use connectors at all (`use("mcp")` is null). That's typical for people
+invited by email who are signed in to a different claude.ai organization. So that they still see
+tickets, **pages whose Tengu works keep a shared copy in the artifact's database**:
+
+| Doc | Written when | Contents |
+|---|---|---|
+| `tengu/projects` | Project list changes | Tengu spaces + their lists |
+| `tengu/index-{projectId}` | Missing or older than 15 min, when that project is opened | Up to 450 most recently changed tickets (`list_tasks` per list, `limit: 100`) |
+| `tenguTickets/{ticketId}` | A linked ticket changes | That ticket |
+
+Each ticket keeps only the key, title, status, priority, assignee names, due date, list and link.
+**Descriptions and comments are never copied.** Anyone who can open the page can read the copy.
+Only viewers who can edit the roadmap write it.
+
+Viewers without Tengu see "Showing Tengu tickets shared by teammates · as of 10:42", can search
+and link from the copy, and open tickets in Tengu for details. Live data always wins when present.
+
 ### Setting up a coworker
 1. Share the page with them as **Contributor** or **Editor**.
-2. They add the **Tengu** connector to their own claude.ai account (Settings → Connectors).
-3. They open the page and click **Allow Tengu** when asked.
+2. Best: they use claude.ai in the same organization, add the **Tengu** connector
+   (Settings → Connectors) and click **Allow Tengu**. They then get live data.
+3. Otherwise they see the shared copy. It stays fresh as long as someone with Tengu opens the
+   page now and then.

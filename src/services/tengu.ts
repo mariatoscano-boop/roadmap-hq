@@ -16,7 +16,8 @@
 import { MOCK_LISTS, MOCK_TICKETS } from '../data/mock';
 import { projectSlug } from '../lib/roadmap';
 import type { Project } from '../types/roadmap';
-import type { StatusRole, TenguComment, TenguTicket } from '../types/tengu';
+import type { SnapTicket, StatusRole, TenguComment, TenguTicket } from '../types/tengu';
+import type { TenguSnapshot } from './roadmapStore';
 import { inArtifact, useCapability } from './runtime';
 
 export interface TenguAdapter {
@@ -30,6 +31,87 @@ export interface TenguAdapter {
    * Tengu may follow (their `listId` is outside `listIds`, or empty when Tengu didn't say).
    */
   searchTickets(query: string, listIds?: string[]): Promise<TenguTicket[]>;
+  /** The most recently changed tickets of these lists (used to build the shared copy). */
+  recentTickets(listIds: string[]): Promise<TenguTicket[]>;
+}
+
+/** Strip a ticket down to what the shared copy keeps. */
+export function toSnap(t: TenguTicket, at: string): SnapTicket {
+  return {
+    id: t.id,
+    key: t.key,
+    title: t.title.slice(0, 200),
+    listId: t.listId,
+    listName: t.listName,
+    status: t.status,
+    statusRole: t.statusRole,
+    priority: t.priority,
+    assignees: t.assignees.map((a) => ({ id: a.id, name: a.name })),
+    dueDate: t.dueDate,
+    url: t.url,
+    updatedAt: t.updatedAt,
+    at,
+  };
+}
+
+/** Did anything a viewer would see change between two copies of a ticket? */
+export function snapDiffers(a: SnapTicket | undefined, b: SnapTicket): boolean {
+  if (!a) return true;
+  const pick = (x: SnapTicket) => JSON.stringify([x.title, x.status, x.statusRole, x.priority, x.dueDate, x.assignees.map((p) => p.name), x.url, x.key]);
+  return pick(a) !== pick(b);
+}
+
+export const fromSnap = (s: SnapTicket): TenguTicket => ({ ...s, description: '', snapshotAt: s.at });
+
+/**
+ * Reads Tengu data from the shared copy that teammates' pages saved, for viewers whose own page
+ * can't reach Tengu. Read-only; never calls Tengu.
+ */
+export class SnapshotTenguAdapter implements TenguAdapter {
+  readonly name = 'Shared copy of Tengu';
+  readonly live = false;
+  readonly server = null;
+  constructor(private snap: () => TenguSnapshot) {}
+
+  private all(): SnapTicket[] {
+    const s = this.snap();
+    const map = new Map<string, SnapTicket>();
+    for (const idx of Object.values(s.index)) for (const t of idx.tickets) map.set(t.id, { ...t, at: t.at || idx.at });
+    for (const t of Object.values(s.tickets)) map.set(t.id, t);
+    return [...map.values()];
+  }
+
+  async getProjects() {
+    const p = this.snap().projects;
+    if (!p) throw new TenguError('No shared copy of Tengu yet. It appears once a teammate with Tengu opens this page.', 'no_snapshot');
+    return p;
+  }
+
+  async getTicket(id: string) {
+    const t = this.all().find((x) => x.id === id);
+    if (!t) throw new TenguError('This ticket isn’t in the shared copy yet.', 'not_found');
+    return fromSnap(t);
+  }
+
+  async getTicketsByIds(ids: string[]) {
+    const all = new Map(this.all().map((t) => [t.id, t]));
+    return { tickets: ids.filter((id) => all.has(id)).map((id) => fromSnap(all.get(id)!)), failed: ids.filter((id) => !all.has(id)) };
+  }
+
+  async searchTickets(query: string, listIds?: string[]) {
+    const q = query.trim().toLowerCase();
+    const inScope = (t: SnapTicket) => !listIds?.length || listIds.includes(t.listId);
+    const match = this.all()
+      .filter((t) => t.statusRole !== 'closed')
+      .filter((t) => !q || `${t.key} ${t.title}`.toLowerCase().includes(q))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const ordered = [...match.filter(inScope), ...(q ? match.filter((t) => !inScope(t)) : [])];
+    return ordered.slice(0, 40).map(fromSnap);
+  }
+
+  async recentTickets(): Promise<TenguTicket[]> {
+    return [];
+  }
 }
 
 /** Group Tengu lists into projects by space. */
@@ -112,6 +194,11 @@ export class MockTenguAdapter implements TenguAdapter {
     return { tickets: clone(tickets).map(({ comments: _c, ...t }) => t as TenguTicket), failed: ids.filter((id) => !this.tickets.has(id)) };
   }
 
+  async recentTickets(listIds: string[]) {
+    await wait(150);
+    return clone([...this.tickets.values()].filter((t) => listIds.includes(t.listId)));
+  }
+
   async searchTickets(query: string, listIds?: string[]) {
     await wait(120 + Math.random() * 180);
     const q = query.trim().toLowerCase();
@@ -190,6 +277,15 @@ export class McpTenguAdapter implements TenguAdapter {
     } catch (e) {
       throw mcpError(e);
     }
+  }
+
+  async recentTickets(listIds: string[]) {
+    const out: TenguTicket[] = [];
+    for (const list_id of listIds.slice(0, 8)) {
+      const p = await this.call('list_tasks', { list_id, limit: 100 });
+      for (const t of p.tasks ?? []) out.push(fromTenguTask(t));
+    }
+    return out;
   }
 
   async getProjects() {
@@ -273,6 +369,9 @@ export class UnavailableTenguAdapter implements TenguAdapter {
     return this.fail();
   }
   async searchTickets(): Promise<TenguTicket[]> {
+    return this.fail();
+  }
+  async recentTickets(): Promise<TenguTicket[]> {
     return this.fail();
   }
 }

@@ -64,5 +64,10 @@ export interface TenguTicket {
   comments?: TenguComment[];
   /** True for search hits whose status hasn't been loaded yet. */
   partial?: boolean;
+  /** Set when this came from the shared copy instead of the viewer's own Tengu (ISO time copied). */
+  snapshotAt?: string;
 }
+
+/** What the shared copy keeps of a ticket: no description, no comments. */
+export type SnapTicket = Omit<TenguTicket, 'description' | 'comments' | 'partial'> & { at: string };
 

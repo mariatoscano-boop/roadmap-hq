@@ -7,7 +7,8 @@
  */
 import { MOCK_INITIATIVES, MOCK_ITEMS } from '../data/mock';
 import { LEGACY_PROJECT, layoutOf } from '../lib/roadmap';
-import type { Initiative, RoadmapItem, RoadmapLayout, Settings } from '../types/roadmap';
+import type { Initiative, Project, RoadmapItem, RoadmapLayout, Settings } from '../types/roadmap';
+import type { SnapTicket } from '../types/tengu';
 import { useCapability } from './runtime';
 
 /** Projects the roadmap has data for (so they still show if Tengu is unreachable). */
@@ -23,6 +24,20 @@ export interface RoadmapSnapshot {
   /** All collections delivered at least once. */
   ready: boolean;
 }
+
+/**
+ * The shared copy of Tengu data, written by viewers whose Tengu works and read by everyone else.
+ * Docs: tengu/projects, tengu/index-{projectId}, tenguTickets/{ticketId}.
+ */
+export interface TenguSnapshot {
+  projects: Project[] | null;
+  projectsAt: string | null;
+  index: Record<string, { tickets: SnapTicket[]; at: string }>;
+  tickets: Record<string, SnapTicket>;
+  ready: boolean;
+}
+
+export const EMPTY_SNAPSHOT: TenguSnapshot = { projects: null, projectsAt: null, index: {}, tickets: {}, ready: false };
 
 export interface Viewer {
   id: string | null;
@@ -42,6 +57,9 @@ export interface RoadmapStore {
   putItem(item: RoadmapItem): Promise<void>;
   deleteItem(id: string): Promise<void>;
   putSettings(s: Settings): Promise<void>;
+  subscribeTengu(next: (s: TenguSnapshot) => void): () => void;
+  putTenguDoc(id: string, data: Record<string, unknown>): Promise<void>;
+  putTenguTicket(id: string, data: Record<string, unknown>): Promise<void>;
 }
 
 export const DEFAULT_SETTINGS: Settings = { tenguBaseUrl: '' };
@@ -152,6 +170,48 @@ export class SharedRoadmapStore implements RoadmapStore {
   putSettings(s: Settings) {
     return this.queue('settings/app', () => this.db.doc('settings/app').set({ ...s }));
   }
+
+  subscribeTengu(next: (s: TenguSnapshot) => void) {
+    const state: TenguSnapshot = { ...EMPTY_SNAPSHOT, index: {}, tickets: {} };
+    const seen = new Set<string>();
+    const emit = (part: string) => {
+      seen.add(part);
+      state.ready = seen.size === 2;
+      next({ ...state });
+    };
+    const quiet = () => undefined; // the roadmap's own listeners report access problems
+    const unsubs = [
+      this.db.collection('tengu').onSnapshot((snap: any) => {
+        state.projects = null;
+        state.projectsAt = null;
+        state.index = {};
+        for (const d of snap.docs) {
+          const data = d.data() ?? {};
+          if (d.id === 'projects') {
+            state.projects = Array.isArray(data.projects) ? data.projects : null;
+            state.projectsAt = data.at ?? null;
+          } else if (d.id.startsWith('index-')) {
+            state.index[d.id.slice(6)] = { tickets: Array.isArray(data.tickets) ? data.tickets : [], at: data.at ?? '' };
+          }
+        }
+        emit('tengu');
+      }, quiet),
+      this.db.collection('tenguTickets').onSnapshot((snap: any) => {
+        const tickets: Record<string, SnapTicket> = {};
+        for (const d of snap.docs) tickets[d.id] = { ...(d.data() as SnapTicket), id: d.id };
+        state.tickets = tickets;
+        emit('tickets');
+      }, quiet),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }
+
+  putTenguDoc(id: string, data: Record<string, unknown>) {
+    return this.queue(`tengu/${id}`, () => this.db.doc(`tengu/${id}`).set(JSON.parse(JSON.stringify(data))));
+  }
+  putTenguTicket(id: string, data: Record<string, unknown>) {
+    return this.queue(`tenguTickets/${id}`, () => this.db.doc(`tenguTickets/${id}`).set(JSON.parse(JSON.stringify(data))));
+  }
 }
 
 // ── Local (this browser) ──────────────────────────────────────────────────────
@@ -230,6 +290,14 @@ export class LocalRoadmapStore implements RoadmapStore {
   async putSettings(settings: Settings) {
     this.commit({ settings });
   }
+
+  /** Local dev has its own sample Tengu, so there's no shared copy to keep. */
+  subscribeTengu(next: (s: TenguSnapshot) => void) {
+    queueMicrotask(() => next({ ...EMPTY_SNAPSHOT, ready: true }));
+    return () => undefined;
+  }
+  async putTenguDoc() {}
+  async putTenguTicket() {}
 
   reset() {
     this.commit(sample());

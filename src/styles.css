@@ -770,3 +770,8 @@ select:disabled, input:disabled, textarea:disabled, .zone-switch button:disabled
 .tengu-card-x { width: 26px; height: 26px; font-size: 11px; }
 .tengu-banner { position: fixed; top: calc(66px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 44; width: min(620px, calc(100vw - 32px)); animation: holo-in 0.25s var(--ease); }
 [hidden] { display: none !important; }
+.tengu-card.is-info { background: rgba(82, 180, 255, 0.07); border-color: rgba(82, 180, 255, 0.32); }
+.tengu-card.is-info .tengu-card-icon { background: rgba(82, 180, 255, 0.18); color: var(--next); }
+.tengu-card.is-info .tengu-card-text b { color: #cfe8ff; }
+.tengu-card.is-info.is-compact { background: rgba(12, 22, 36, 0.94); }
+.sync-dot-info { background: var(--next); box-shadow: 0 0 8px var(--next); }

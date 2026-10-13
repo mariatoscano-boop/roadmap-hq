@@ -2,10 +2,10 @@ import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type
 import { ITEM_STATUS } from '../lib/missions';
 import { isComplete } from '../lib/progress';
 import { applyLayout, LEGACY_PROJECT, layoutOf, moveInitiative, uid, ZONE_META } from '../lib/roadmap';
-import { createRoadmapStore, DEFAULT_SETTINGS, LocalRoadmapStore, type RoadmapSnapshot, type RoadmapStore, type SavedProjects } from '../services/roadmapStore';
+import { createRoadmapStore, DEFAULT_SETTINGS, EMPTY_SNAPSHOT, LocalRoadmapStore, type RoadmapSnapshot, type RoadmapStore, type SavedProjects, type TenguSnapshot } from '../services/roadmapStore';
 import { SyncEngine, type SyncSnapshot } from '../services/sync';
 import { useCapability } from '../services/runtime';
-import { createTenguAdapter, stateForCode, TENGU_SERVER, type TenguAdapter, type TenguState } from '../services/tengu';
+import { createTenguAdapter, fromSnap, SnapshotTenguAdapter, snapDiffers, stateForCode, TENGU_SERVER, toSnap, type TenguAdapter, type TenguState } from '../services/tengu';
 import type { Initiative, ItemStatus, Project, RoadmapItem, RoadmapLayout, Settings, Zone } from '../types/roadmap';
 import type { TenguTicket } from '../types/tengu';
 
@@ -23,6 +23,8 @@ export interface AppState {
   storeKind: 'shared' | 'local' | null;
   /** How this viewer is connected to Tengu, and what to tell them if they aren't. */
   tengu: { state: TenguState; message: string | null };
+  /** Shared copy of Tengu data saved by teammates whose Tengu works. */
+  snapshot: TenguSnapshot;
   viewerId: string | null;
   /** False once the platform (or a refused save) says this viewer can't change the roadmap. */
   canEdit: boolean;
@@ -64,6 +66,7 @@ type UiPatch = Partial<Pick<AppState, 'mode' | 'activeInitiative' | 'activeItem'
 type Action =
   | { type: 'boot'; storeKind: 'shared' | 'local' }
   | { type: 'tengu'; state: TenguState; message: string | null }
+  | { type: 'snapshot'; snapshot: TenguSnapshot }
   | { type: 'viewer'; id: string | null; canEdit: boolean }
   | { type: 'data'; snap: RoadmapSnapshot }
   | { type: 'tenguProjects'; projects: Project[] | null; error: string | null }
@@ -107,7 +110,7 @@ function preferredProject(): string | null {
 /** Tengu spaces first-class; projects only known from saved data are kept so nothing disappears. */
 function mergeProjects(state: AppState): Project[] {
   const byId = new Map<string, Project>();
-  for (const p of state.tenguProjects ?? []) byId.set(p.id, p);
+  for (const p of state.tenguProjects ?? state.snapshot.projects ?? []) byId.set(p.id, p);
   const withData = new Set(state.allInitiatives.map((i) => i.projectId));
   for (const id of new Set([...Object.keys(state.savedProjects), ...withData])) {
     if (!byId.has(id)) byId.set(id, { id, name: state.savedProjects[id]?.name ?? id, lists: [], inTengu: false });
@@ -166,6 +169,16 @@ function reducer(state: AppState, a: Action): AppState {
         activeItem,
       });
     }
+    case 'snapshot': {
+      // Fill in tickets this viewer has no live copy of; live data always wins.
+      const tickets = { ...state.tickets };
+      const fill = (t: Parameters<typeof fromSnap>[0]) => {
+        if (!tickets[t.id] || tickets[t.id].snapshotAt) tickets[t.id] = fromSnap(t);
+      };
+      for (const idx of Object.values(a.snapshot.index)) for (const t of idx.tickets) fill({ ...t, at: t.at || idx.at });
+      for (const t of Object.values(a.snapshot.tickets)) fill(t);
+      return settle({ ...state, snapshot: a.snapshot, tickets });
+    }
     case 'tenguProjects':
       return settle({ ...state, tenguProjects: a.projects, projectsError: a.error });
     case 'project':
@@ -209,8 +222,30 @@ function reducer(state: AppState, a: Action): AppState {
 
 interface Services {
   store: RoadmapStore | null;
+  /** Routes each call to the viewer's own Tengu, or to the shared copy when that isn't reachable. */
   adapter: (TenguAdapter & { server: string | null }) | null;
+  /** The viewer's own Tengu (tracked). */
+  live: (TenguAdapter & { server: string | null }) | null;
   engine: SyncEngine | null;
+}
+
+/** States in which calls go to the viewer's own Tengu. */
+export const liveState = (s: TenguState) => s === 'connected' || s === 'checking' || s === 'sample';
+
+/** Whether this viewer is looking at the shared copy, and when it was last saved. */
+export function snapshotInfo(state: AppState): { inUse: boolean; available: boolean; at: string | null } {
+  const s = state.snapshot;
+  const times = [s.projectsAt, ...Object.values(s.index).map((i) => i.at), ...Object.values(s.tickets).map((t) => t.at)].filter(Boolean) as string[];
+  const available = !!s.projects || times.length > 0;
+  const at = times.sort().pop() ?? null;
+  return { inUse: available && !liveState(state.tengu.state), available, at };
+}
+
+export function formatCopyTime(iso: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 /** Wrap an adapter so every call reports whether Tengu answered. */
@@ -234,6 +269,7 @@ function tracked<T extends TenguAdapter & { server: string | null }>(a: T, ok: (
     getTicket: wrap(a.getTicket.bind(a)),
     getTicketsByIds: wrap(a.getTicketsByIds.bind(a)),
     searchTickets: wrap(a.searchTickets.bind(a)),
+    recentTickets: wrap(a.recentTickets.bind(a)),
   };
 }
 
@@ -270,10 +306,62 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
 
   const reloadProjects = async () => {
     if (!svc.adapter) return;
+    const live = liveState(get().tengu.state);
     try {
       dispatch({ type: 'tenguProjects', projects: await svc.adapter.getProjects(), error: null });
     } catch (e) {
-      dispatch({ type: 'tenguProjects', projects: get().tenguProjects, error: (e as Error).message });
+      // Without live Tengu, the list comes from the shared copy instead; no error to show.
+      dispatch({ type: 'tenguProjects', projects: get().tenguProjects, error: live ? (e as Error).message : null });
+    }
+  };
+
+  // ── Shared copy of Tengu (written by viewers whose Tengu works) ──────────
+  const canShare = () => {
+    const s = get();
+    return s.storeKind === 'shared' && s.canEdit && (s.tengu.state === 'connected' || s.tengu.state === 'checking');
+  };
+  const indexing = new Set<string>();
+  const indexed = new Set<string>();
+  const INDEX_TTL = 15 * 60_000;
+
+  const shareTickets = (tickets: TenguTicket[]) => {
+    if (!canShare() || !svc.store) return;
+    // The sync engine only reads linked tickets, so everything here belongs in the shared copy.
+    const s = get();
+    const at = new Date().toISOString();
+    for (const t of tickets) {
+      if (t.snapshotAt || t.partial) continue;
+      const snap = toSnap(t, at);
+      if (snapDiffers(s.snapshot.tickets[t.id], snap)) void svc.store.putTenguTicket(t.id, { ...snap, by: s.viewerId }).catch(() => undefined);
+    }
+  };
+
+  const shareTengu = async () => {
+    const s = get();
+    if (!canShare() || !svc.store || !svc.live || !s.snapshot.ready) return;
+    const at = new Date().toISOString();
+    if (s.tenguProjects?.length && JSON.stringify(s.tenguProjects) !== JSON.stringify(s.snapshot.projects)) {
+      void svc.store.putTenguDoc('projects', { projects: s.tenguProjects, at, by: s.viewerId }).catch(() => undefined);
+    }
+    const pid = s.projectId;
+    const project = s.projects.find((p) => p.id === pid);
+    if (!pid || !project?.lists.length || indexing.has(pid) || indexed.has(pid)) return;
+    const existing = s.snapshot.index[pid];
+    if (existing && Date.now() - new Date(existing.at).getTime() < INDEX_TTL) return;
+    indexing.add(pid);
+    try {
+      const tickets = await svc.live.recentTickets(project.lists.map((l) => l.id));
+      const snaps = tickets
+        .filter((t) => t.statusRole !== 'closed')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 450)
+        .map((t) => toSnap(t, at));
+      await svc.store.putTenguDoc(`index-${pid}`, { tickets: snaps, at, by: s.viewerId });
+      indexed.add(pid);
+    } catch {
+      /* try again on the next visit */
+    } finally {
+      indexing.delete(pid);
     }
   };
   const itemById = (id: string) => get().items.find((i) => i.id === id);
@@ -285,6 +373,8 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
     setMode: (mode: Mode) => ui({ mode }),
     setProject: (id: string) => dispatch({ type: 'project', id }),
     reloadProjects,
+    shareTengu,
+    shareTickets,
     /** Try Tengu again (after connecting, allowing, or a hiccup). */
     async retryTengu() {
       await reloadProjects();
@@ -293,7 +383,7 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
     /** Ask the viewer to allow Tengu for this page, or open the Permissions panel if they turned it off. */
     async allowTengu() {
       const perms = await useCapability('permissions');
-      const name = `mcp:${svc.adapter?.server ?? TENGU_SERVER}`;
+      const name = `mcp:${svc.live?.server ?? TENGU_SERVER}`;
       if (perms) {
         const st = await Promise.resolve(perms.state(name)).catch(() => 'unavailable');
         if (st === 'denied') {
@@ -485,6 +575,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ready: false,
     storeKind: null,
     tengu: { state: 'checking', message: null },
+    snapshot: EMPTY_SNAPSHOT,
     viewerId: null,
     canEdit: true,
     projects: [],
@@ -516,7 +607,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
-  const svc = useRef<Services>({ store: null, adapter: null, engine: null }).current;
+  const svc = useRef<Services>({ store: null, adapter: null, live: null, engine: null }).current;
   const actions = useMemo(() => createActions(() => stateRef.current, dispatch, svc), [svc]);
 
   useEffect(() => {
@@ -542,7 +633,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           dispatch({ type: 'tengu', state: stateForCode(code), message: (e as Error)?.message || 'Tengu request failed.' });
         },
       );
-      svc.adapter = adapter;
+      svc.live = adapter;
+      const snapAdapter = new SnapshotTenguAdapter(() => stateRef.current.snapshot);
+      const pick = () => (liveState(stateRef.current.tengu.state) ? adapter : snapAdapter);
+      svc.adapter = {
+        name: 'Tengu',
+        live: true,
+        server: adapter.server,
+        getProjects: () => pick().getProjects(),
+        getTicket: (id) => pick().getTicket(id),
+        getTicketsByIds: (ids) => pick().getTicketsByIds(ids),
+        searchTickets: (q, lists) => pick().searchTickets(q, lists),
+        recentTickets: (lists) => pick().recentTickets(lists),
+      };
       // A viewer who turned Tengu off for this page gets the fix button right away.
       if (boot.state === 'checking') {
         void useCapability('permissions').then(async (perms) => {
@@ -550,8 +653,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (st === 'denied') dispatch({ type: 'tengu', state: 'needs-allow', message: 'Tengu is turned off for this page.' });
         });
       }
-      svc.engine = new SyncEngine(adapter, {
-        onTickets: (tickets) => dispatch({ type: 'tickets', tickets }),
+      svc.engine = new SyncEngine(svc.adapter, {
+        onTickets: (tickets) => {
+          dispatch({ type: 'tickets', tickets });
+          actions.shareTickets(tickets);
+        },
         onRemoteChanges: (tickets) => {
           dispatch({ type: 'remote', ids: tickets.map((t) => t.id) });
           for (const t of tickets.slice(0, 2)) actions.toast(`${t.key || t.title} is now “${t.status}” in Tengu`, isComplete({ role: t.statusRole }) ? 'success' : 'info');
@@ -560,13 +666,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }, boot.adapter.live ? 90_000 : 30_000);
       svc.engine.start();
       void actions.reloadProjects();
-      unsub = store.subscribe(
+      const unsubTengu = store.subscribeTengu((snapshot) => dispatch({ type: 'snapshot', snapshot }));
+      const unsubData = store.subscribe(
         (snap) => {
           dispatch({ type: 'data', snap });
           svc.engine?.setIds([...new Set(snap.items.filter((i) => i.tengu).map((i) => i.tengu!.id))]);
         },
         (message) => dispatch({ type: 'dataError', message }),
       );
+      unsub = () => {
+        unsubTengu();
+        unsubData();
+      };
       const viewer = await store.viewer();
       if (!cancelled) dispatch({ type: 'viewer', id: viewer.id, canEdit: viewer.canWrite !== false });
     })();
@@ -576,6 +687,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       svc.engine?.stop();
     };
   }, [svc, actions]);
+
+  // Keep the shared copy of Tengu fresh when this viewer's Tengu works (on load and project switch).
+  useEffect(() => {
+    void actions.shareTengu();
+  }, [actions, state.snapshot.ready, state.tenguProjects, state.tengu.state, state.projectId, state.canEdit, state.storeKind]);
+
+  // When Tengu isn't reachable directly, re-read linked tickets once the shared copy arrives.
+  useEffect(() => {
+    if (!liveState(state.tengu.state) && state.snapshot.ready) void svc.engine?.pull();
+  }, [state.tengu.state, state.snapshot.ready, svc]);
 
   // Resolve names for "updated by" whenever new people appear.
   useEffect(() => {

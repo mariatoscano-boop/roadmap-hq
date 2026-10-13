@@ -52,7 +52,8 @@ export function ItemPanel() {
           <>
             <div className="panel-status-line">
               <StatusPill role={m.role} label={m.statusLabel} />
-              {t && <span className="muted">updated in Tengu {timeAgo(t.updatedAt)}</span>}
+              {t && !t.snapshotAt && <span className="muted">updated in Tengu {timeAgo(t.updatedAt)}</span>}
+              {t?.snapshotAt && <span className="muted">from Tengu · as of {timeAgo(t.snapshotAt)}</span>}
               {!t && <span className="muted">{state.tengu.state === 'connected' || state.tengu.state === 'checking' ? 'Loading from Tengu…' : 'Tengu isn’t connected for you'}</span>}
             </div>
             {m.url ? (
@@ -74,6 +75,9 @@ export function ItemPanel() {
                 <Markdownish text={t.description} />
               </section>
             )}
+            {t?.snapshotAt ? (
+              <p className="fine">You’re seeing the shared copy, so the description and comments aren’t included. Open the ticket in Tengu for details.</p>
+            ) : (
             <section className="panel-section">
               <h4>Activity in Tengu</h4>
               {t?.comments === undefined && <div className="skeleton" />}
@@ -90,6 +94,7 @@ export function ItemPanel() {
                 ))}
               </ol>
             </section>
+            )}
           </>
         ) : (
           <section className="panel-fields">

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useStore } from '../../app/store';
+import { formatCopyTime, snapshotInfo, useStore } from '../../app/store';
 
 function ago(ts: number | null) {
   if (!ts) return '';
@@ -41,6 +41,15 @@ export function SyncIndicator() {
     return <span className="sync sync-error" title={state.saveError}>⚠ Not saved</span>;
   }
   const t = state.tengu.state;
+  const snap = snapshotInfo(state);
+  if (snap.inUse) {
+    return (
+      <button className="sync sync-ok" onClick={() => actions.openModal('settings')} title="Your view can’t reach Tengu directly, so tickets come from the copy teammates’ pages saved.">
+        <i className="sync-dot sync-dot-info" />
+        Tengu: shared copy · {formatCopyTime(snap.at)}
+      </button>
+    );
+  }
   if (t === 'needs-allow' || t === 'not-connected' || t === 'reconnect' || t === 'unavailable') {
     const label = t === 'needs-allow' ? 'Tengu: allow access' : t === 'reconnect' ? 'Tengu: reconnect' : 'Tengu: not connected';
     return (

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useStore } from '../../app/store';
+import { formatCopyTime, snapshotInfo, useStore } from '../../app/store';
 import type { TenguState } from '../../services/tengu';
 
 const COPY: Partial<Record<TenguState, { title: string; body: string; action: 'allow' | 'reload' | 'retry' }>> = {
@@ -36,9 +36,36 @@ export const tenguReady = (s: TenguState) => s === 'connected' || s === 'sample'
 export function TenguStatusCard({ compact = false, onDismiss }: { compact?: boolean; onDismiss?: () => void }) {
   const { state, actions } = useStore();
   const [busy, setBusy] = useState(false);
+  const snap = snapshotInfo(state);
   const c = COPY[state.tengu.state];
   if (!c) return null;
-  const run = async () => {
+  if (snap.inUse) {
+    // Teammates' copy is filling in: say so calmly, and keep the fix for states the viewer can fix.
+    const fixable = state.tengu.state === 'needs-allow' || state.tengu.state === 'reconnect' || state.tengu.state === 'error';
+    return (
+      <div className={`tengu-card is-info ${compact ? 'is-compact' : ''}`} role="status">
+        <span className="tengu-card-icon" aria-hidden>↻</span>
+        <div className="tengu-card-text">
+          <b>Showing Tengu tickets shared by teammates · as of {formatCopyTime(snap.at)}</b>
+          {!compact && (
+            <span>
+              {state.tengu.state === 'unavailable'
+                ? 'Your view can’t reach Tengu directly, which usually means you’re signed in to a different claude.ai organization. You can still find and link tickets; open them in Tengu for details.'
+                : `${c.title}. You can still find and link tickets from the shared copy.`}
+            </span>
+          )}
+        </div>
+        {fixable && (
+          <button className="btn btn-sm" disabled={busy} onClick={run}>
+            {busy ? 'Checking…' : c.action === 'allow' ? 'Allow Tengu' : c.action === 'retry' ? 'Try again' : 'Reload'}
+          </button>
+        )}
+        {onDismiss && <button className="icon-btn tengu-card-x" onClick={onDismiss} aria-label="Hide">✕</button>}
+      </div>
+    );
+  }
+  async function run() {
+    if (!c) return;
     setBusy(true);
     try {
       if (c.action === 'allow') await actions.allowTengu();
@@ -47,7 +74,7 @@ export function TenguStatusCard({ compact = false, onDismiss }: { compact?: bool
     } finally {
       setBusy(false);
     }
-  };
+  }
   const body = c.body || state.tengu.message || '';
   return (
     <div className={`tengu-card ${compact ? 'is-compact' : ''}`} role="status">
