@@ -29,9 +29,11 @@ export function AddWorkModal() {
   );
   const linkedElsewhere = useMemo(() => {
     const m = new Map<string, string>();
-    for (const i of state.items) if (i.tengu && i.initiativeId !== target) m.set(i.tengu.id, state.initiatives.find((x) => x.id === i.initiativeId)?.name ?? '');
+    for (const i of state.items) if (i.tengu && i.initiativeId !== target) m.set(i.tengu.id, state.allInitiatives.find((x) => x.id === i.initiativeId)?.name ?? '');
     return m;
-  }, [state.items, state.initiatives, target]);
+  }, [state.items, state.allInitiatives, target]);
+  const project = state.projects.find((p) => p.id === state.projectId);
+  const projectLists = new Set(project?.lists.map((l) => l.id) ?? []);
 
   useEffect(() => input.current?.focus(), []);
   useEffect(() => {
@@ -51,6 +53,9 @@ export function AddWorkModal() {
   }, [q, actions]);
 
   const sorted = (results ?? []).slice().sort((a, b) => Number(linkedHere.has(a.id)) - Number(linkedHere.has(b.id)));
+  // Tickets from this project's Tengu lists first; everything else Tengu found after.
+  const inProject = projectLists.size ? sorted.filter((t) => projectLists.has(t.listId)) : sorted;
+  const more = projectLists.size ? sorted.filter((t) => !projectLists.has(t.listId)) : [];
   const toggle = (t: TenguTicket) => {
     if (linkMode && linkingItem) {
       actions.linkItem(linkingItem.id, t);
@@ -121,19 +126,23 @@ export function AddWorkModal() {
         )}
 
         <div className="add-section-head">
-          {linkMode ? 'Tengu tickets' : q.trim() ? 'Or link matching Tengu tickets' : 'Recent Tengu tickets'}
+          {linkMode ? `Tengu tickets in ${project?.name ?? 'this project'}` : q.trim() ? `Or link matching Tengu tickets in ${project?.name ?? 'this project'}` : `Recent Tengu tickets in ${project?.name ?? 'this project'}`}
           {!state.tenguLive && <span className="sample-tag">sample data</span>}
         </div>
         <div className="link-results">
           {results === null && !error && <div className="skeleton-list"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div>}
           {error && <div className="inline-error">{error} You can still add roadmap items without a link.</div>}
           {results?.length === 0 && !error && <div className="palette-empty">No Tengu tickets match “{q}”.</div>}
-          {sorted.map((t) => {
+          {results && results.length > 0 && inProject.length === 0 && <div className="palette-empty small">Nothing in {project?.name}’s lists. See other matches below.</div>}
+          {[...inProject, ...more].map((t, idx) => {
             const here = linkedHere.has(t.id);
             const on = picked.some((x) => x.id === t.id);
             const elsewhere = linkedElsewhere.get(t.id);
+            const header = more.length > 0 && idx === inProject.length;
             return (
-              <button key={t.id} disabled={here} className={`link-item ${on ? 'is-on' : ''} ${here ? 'is-linked' : ''}`} onClick={() => toggle(t)}>
+              <div key={t.id} className="link-row">
+              {header && <div className="add-section-head add-section-sub">More from Tengu</div>}
+              <button disabled={here} className={`link-item ${on ? 'is-on' : ''} ${here ? 'is-linked' : ''}`} onClick={() => toggle(t)}>
                 {!linkMode && <span className="checkbox" aria-hidden>{here || on ? '✓' : ''}</span>}
                 {t.key && <span className="pi-key">{t.key}</span>}
                 <span className="link-title">{t.title}</span>
@@ -143,6 +152,7 @@ export function AddWorkModal() {
                 {t.assignees[0] && <Avatar name={t.assignees[0].name} size={18} />}
                 {here ? <span className="muted small">Added</span> : elsewhere ? <span className="muted small">in {elsewhere}</span> : null}
               </button>
+              </div>
             );
           })}
         </div>

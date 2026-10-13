@@ -20,6 +20,7 @@ export const MOCK_LISTS: TenguList[] = [
   { id: 'list-marketplace', name: 'Next.js Marketplace', space: 'Fiji', statuses: FIJI_STATUSES },
   { id: 'list-platform', name: 'Platform', space: 'Fiji', statuses: FIJI_STATUSES },
   { id: 'list-intelligence', name: 'AI & Insights', space: 'Fiji', statuses: FIJI_STATUSES },
+  { id: 'list-dosify-dev', name: 'Development', space: 'Dosify', statuses: FIJI_STATUSES },
 ];
 
 export const MOCK_MEMBERS: TenguMember[] = [
@@ -142,20 +143,22 @@ export const MOCK_TICKETS: TenguTicket[] = [
   t(192, PLT, 'Design tokens: dark mode', 'in progress', 3, 'Dafne', '2026-10-25', 'Dark mode tokens across the design system.', [], 1),
   t(195, PLT, 'Auth session refresh bug', 'rework', 1, 'Iván', '2026-10-14', 'Sessions expire mid-checkout on Safari.', [c('Natalia', 'Still reproducible on iOS 18.', 0)], 0),
   t(198, MKT, 'Seller payouts dashboard', 'backlog', 2, 'Camila', '2027-01-10', 'Payout history and upcoming transfers for sellers.', [], 8),
+  { ...t(501, 'list-dosify-dev', 'Dose reminder notifications', 'in progress', 2, 'Mateo', '2026-10-28', 'Push reminders for scheduled doses.', [], 1), key: 'DOS-501', url: 'https://tengu.example/t/DOS-501' },
+  { ...t(502, 'list-dosify-dev', 'Onboarding quiz redesign', 'backlog', 3, null, null, 'Shorter onboarding quiz with progress bar.', [], 3), key: 'DOS-502', url: 'https://tengu.example/t/DOS-502' },
 ];
 
 export const MOCK_INITIATIVES: Initiative[] = [
-  { id: 'ini-ai', name: 'AI Assistant', icon: '🚀', place: 'AI Lab', zone: 'now', order: 0, priority: 'P0', status: 'In Progress', owner: 'Sofía', target: '2026-11', hue: 265,
+  { id: 'ini-ai', projectId: 'fiji', name: 'AI Assistant', icon: '🚀', place: 'AI Lab', zone: 'now', order: 0, priority: 'P0', status: 'In Progress', owner: 'Sofía', target: '2026-11', hue: 265,
     summary: 'A shopping assistant that answers, reorders and tracks — grounded in our catalog and orders.' },
-  { id: 'ini-mkt', name: 'Marketplace 2.0', icon: '🏪', place: 'Marketplace District', zone: 'now', order: 1, priority: 'P0', status: 'In Progress', owner: 'Natalia', target: '2026-10', hue: 28,
+  { id: 'ini-mkt', projectId: 'fiji', name: 'Marketplace 2.0', icon: '🏪', place: 'Marketplace District', zone: 'now', order: 1, priority: 'P0', status: 'In Progress', owner: 'Natalia', target: '2026-10', hue: 28,
     summary: 'Faster discovery, better filters and a seller onboarding that converts.' },
-  { id: 'ini-ins', name: 'Insights', icon: '🧠', place: 'Insights Lab', zone: 'now', order: 2, priority: 'P1', status: 'In Progress', owner: 'Diego', target: '2026-12', hue: 188,
+  { id: 'ini-ins', projectId: 'fiji', name: 'Insights', icon: '🧠', place: 'Insights Lab', zone: 'now', order: 2, priority: 'P1', status: 'In Progress', owner: 'Diego', target: '2026-12', hue: 188,
     summary: 'Self-serve marketplace analytics: cohorts, seller performance and anomaly alerts.' },
-  { id: 'ini-dash', name: 'Dashboard 2.0', icon: '📊', place: 'Dashboard Center', zone: 'next', order: 0, priority: 'P1', status: 'Planning', owner: 'Lucía', target: '2027-01', hue: 212,
+  { id: 'ini-dash', projectId: 'fiji', name: 'Dashboard 2.0', icon: '📊', place: 'Dashboard Center', zone: 'next', order: 0, priority: 'P1', status: 'Planning', owner: 'Lucía', target: '2027-01', hue: 212,
     summary: 'Composable dashboards teams can arrange, save and share.' },
-  { id: 'ini-buyer', name: 'Buyer Profile 2.0', icon: '👤', place: 'Buyer Profile Studio', zone: 'next', order: 1, priority: 'P2', status: 'Discovery', owner: 'Dafne', target: '2026-12', hue: 330,
+  { id: 'ini-buyer', projectId: 'fiji', name: 'Buyer Profile 2.0', icon: '👤', place: 'Buyer Profile Studio', zone: 'next', order: 1, priority: 'P2', status: 'Discovery', owner: 'Dafne', target: '2026-12', hue: 330,
     summary: 'A profile buyers actually manage — preferences, sizes, privacy.' },
-  { id: 'ini-plat', name: 'Platform Migration', icon: '🏗', place: 'Platform Garage', zone: 'later', order: 0, priority: 'P2', status: 'Planning', owner: 'Iván', target: '2027-02', hue: 150,
+  { id: 'ini-plat', projectId: 'fiji', name: 'Platform Migration', icon: '🏗', place: 'Platform Garage', zone: 'later', order: 0, priority: 'P2', status: 'Planning', owner: 'Iván', target: '2027-02', hue: 150,
     summary: 'Postgres 16, a new queue and tracing everywhere — the foundation for 2027.' },
 ];
 

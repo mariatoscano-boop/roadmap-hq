@@ -1,11 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react';
 import { ITEM_STATUS } from '../lib/missions';
 import { isComplete } from '../lib/progress';
-import { applyLayout, layoutOf, moveInitiative, uid, ZONE_META } from '../lib/roadmap';
-import { createRoadmapStore, DEFAULT_SETTINGS, LocalRoadmapStore, type RoadmapSnapshot, type RoadmapStore } from '../services/roadmapStore';
+import { applyLayout, LEGACY_PROJECT, layoutOf, moveInitiative, uid, ZONE_META } from '../lib/roadmap';
+import { createRoadmapStore, DEFAULT_SETTINGS, LocalRoadmapStore, type RoadmapSnapshot, type RoadmapStore, type SavedProjects } from '../services/roadmapStore';
 import { SyncEngine, type SyncSnapshot } from '../services/sync';
 import { createTenguAdapter, type TenguAdapter } from '../services/tengu';
-import type { Initiative, ItemStatus, RoadmapItem, RoadmapLayout, Settings, Zone } from '../types/roadmap';
+import type { Initiative, ItemStatus, Project, RoadmapItem, RoadmapLayout, Settings, Zone } from '../types/roadmap';
 import type { TenguTicket } from '../types/tengu';
 
 export type Mode = 'world' | 'list' | 'timeline';
@@ -24,8 +24,18 @@ export interface AppState {
   viewerId: string | null;
   /** False once the platform (or a refused save) says this viewer can't change the roadmap. */
   canEdit: boolean;
+  /** Projects to switch between: Tengu spaces, plus any the roadmap has data for. */
+  projects: Project[];
+  projectId: string | null;
+  /** Tengu's spaces (null until loaded); `projectsError` explains why they're missing. */
+  tenguProjects: Project[] | null;
+  projectsError: string | null;
+  savedProjects: SavedProjects;
+  layouts: Record<string, RoadmapLayout>;
+  /** Every project's initiatives. */
+  allInitiatives: Initiative[];
+  /** The current project's initiatives — what every view shows. */
   initiatives: Initiative[];
-  layout: RoadmapLayout | null;
   items: RoadmapItem[];
   settings: Settings;
   /** Person id → display name, for "updated by". */
@@ -53,6 +63,8 @@ type Action =
   | { type: 'boot'; storeKind: 'shared' | 'local'; tenguLive: boolean }
   | { type: 'viewer'; id: string | null; canEdit: boolean }
   | { type: 'data'; snap: RoadmapSnapshot }
+  | { type: 'tenguProjects'; projects: Project[] | null; error: string | null }
+  | { type: 'project'; id: string }
   | { type: 'names'; names: Record<string, string> }
   | { type: 'tickets'; tickets: TenguTicket[] }
   | { type: 'remote'; ids: string[] }
@@ -63,6 +75,59 @@ type Action =
   | { type: 'ui'; patch: UiPatch }
   | { type: 'toast'; toast: Toast }
   | { type: 'dismiss'; id: string };
+
+const PROJECT_KEY = 'producthq.project';
+
+function rememberProject(id: string) {
+  try {
+    localStorage.setItem(PROJECT_KEY, id);
+  } catch {
+    /* storage unavailable */
+  }
+  try {
+    if (location.hash.slice(1) !== id) history.replaceState(null, '', `#${id}`);
+  } catch {
+    /* sandboxed */
+  }
+}
+
+function preferredProject(): string | null {
+  const hash = typeof location !== 'undefined' ? location.hash.slice(1) : '';
+  if (/^[a-z0-9-]+$/.test(hash)) return hash;
+  try {
+    return localStorage.getItem(PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Tengu spaces first-class; projects only known from saved data are kept so nothing disappears. */
+function mergeProjects(state: AppState): Project[] {
+  const byId = new Map<string, Project>();
+  for (const p of state.tenguProjects ?? []) byId.set(p.id, p);
+  const withData = new Set(state.allInitiatives.map((i) => i.projectId));
+  for (const id of new Set([...Object.keys(state.savedProjects), ...withData])) {
+    if (!byId.has(id)) byId.set(id, { id, name: state.savedProjects[id]?.name ?? id, lists: [], inTengu: false });
+  }
+  return [...byId.values()].sort((a, b) => Number(withData.has(b.id)) - Number(withData.has(a.id)) || a.name.localeCompare(b.name));
+}
+
+/** Recompute the project list, pick a project if none, and narrow initiatives to it. */
+function settle(state: AppState): AppState {
+  const projects = mergeProjects(state);
+  let projectId = state.projectId;
+  if (!projectId || (!projects.some((p) => p.id === projectId) && state.tenguProjects !== null)) {
+    const pref = preferredProject();
+    projectId =
+      (pref && projects.find((p) => p.id === pref)?.id) ||
+      projects.find((p) => p.id === LEGACY_PROJECT && state.allInitiatives.some((i) => i.projectId === p.id))?.id ||
+      projects[0]?.id ||
+      projectId;
+  }
+  const initiatives = state.allInitiatives.filter((i) => i.projectId === projectId);
+  const activeInitiative = state.activeInitiative && initiatives.some((i) => i.id === state.activeInitiative) ? state.activeInitiative : null;
+  return { ...state, projects, projectId, initiatives, activeInitiative };
+}
 
 const itemDone = (i: RoadmapItem, tickets: Record<string, TenguTicket>) =>
   i.tengu && tickets[i.tengu.id] ? isComplete({ role: tickets[i.tengu.id].statusRole }) : i.status === 'done';
@@ -80,11 +145,27 @@ function reducer(state: AppState, a: Action): AppState {
         const p = prev.get(i.id);
         if (p && !itemDone(p, state.tickets) && itemDone(i, state.tickets)) justCompleted[i.id] = Date.now();
       }
-      const initiatives = applyLayout(a.snap.initiatives, a.snap.layout);
-      const activeInitiative = state.activeInitiative && initiatives.some((i) => i.id === state.activeInitiative) ? state.activeInitiative : null;
+      const groups = new Map<string, Initiative[]>();
+      for (const i of a.snap.initiatives) groups.set(i.projectId, [...(groups.get(i.projectId) ?? []), i]);
+      const allInitiatives = [...groups.entries()].flatMap(([pid, list]) => applyLayout(list, a.snap.layouts[pid] ?? null));
       const activeItem = state.activeItem && a.snap.items.some((i) => i.id === state.activeItem) ? state.activeItem : null;
-      return { ...state, ready: a.snap.ready, initiatives, layout: a.snap.layout, items: a.snap.items, settings: a.snap.settings, justCompleted, activeInitiative, activeItem };
+      return settle({
+        ...state,
+        ready: a.snap.ready,
+        allInitiatives,
+        layouts: a.snap.layouts,
+        savedProjects: a.snap.projects,
+        items: a.snap.items,
+        settings: a.snap.settings,
+        justCompleted,
+        activeItem,
+      });
     }
+    case 'tenguProjects':
+      return settle({ ...state, tenguProjects: a.projects, projectsError: a.error });
+    case 'project':
+      rememberProject(a.id);
+      return settle({ ...state, projectId: a.id, activeInitiative: null, activeItem: null, spotlight: null });
     case 'names':
       return { ...state, names: { ...state.names, ...a.names } };
     case 'tickets': {
@@ -159,11 +240,21 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
   };
 
   const itemById = (id: string) => get().items.find((i) => i.id === id);
+  const pid = () => get().projectId ?? LEGACY_PROJECT;
 
   return {
     toast,
     ui,
     setMode: (mode: Mode) => ui({ mode }),
+    setProject: (id: string) => dispatch({ type: 'project', id }),
+    async reloadProjects() {
+      if (!svc.adapter) return;
+      try {
+        dispatch({ type: 'tenguProjects', projects: await svc.adapter.getProjects(), error: null });
+      } catch (e) {
+        dispatch({ type: 'tenguProjects', projects: get().tenguProjects, error: (e as Error).message });
+      }
+    },
     enterInitiative: (id: string | null) => ui({ activeInitiative: id, activeItem: null }),
     openItem: (id: string | null) => ui({ activeItem: id }),
     openModal: (modal: Modal, modalTarget: string | null = null) => ui({ modal, modalTarget }),
@@ -175,7 +266,7 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
       const s = get();
       const before = s.initiatives.find((i) => i.id === id);
       const moved = moveInitiative(s.initiatives, id, zone, index);
-      void save(() => svc.store!.putLayout(layoutOf(moved)), 'the new order');
+      void save(() => svc.store!.putLayout(pid(), layoutOf(moved)), 'the new order');
       if (before && before.zone !== zone) {
         toast(`${before.icon} ${before.name} moved to ${ZONE_META[zone].emoji} ${ZONE_META[zone].label}`, 'success');
       }
@@ -189,22 +280,25 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
       const target = idx + delta;
       if (target < 0 || target >= zoneList.length) return;
       const moved = moveInitiative(s.initiatives, id, ini.zone, target);
-      void save(() => svc.store!.putLayout(layoutOf(moved)), 'the new order');
+      void save(() => svc.store!.putLayout(pid(), layoutOf(moved)), 'the new order');
     },
     updateInitiative(id: string, patch: Partial<Initiative>) {
       const ini = get().initiatives.find((i) => i.id === id);
       if (!ini) return;
       void save(() => svc.store!.putInitiative({ ...ini, ...patch, ...stamp() }), ini.name);
     },
-    createInitiative(draft: Omit<Initiative, 'id' | 'order'>) {
+    createInitiative(draft: Omit<Initiative, 'id' | 'order' | 'projectId'>) {
       const s = get();
       const id = uid('ini');
-      const ini: Initiative = { ...draft, id, order: 999, ...stamp() };
+      const projectId = pid();
+      const ini: Initiative = { ...draft, projectId, id, order: 999, ...stamp() };
       const layout = layoutOf(s.initiatives);
       layout[draft.zone] = [...layout[draft.zone], id];
+      const project = s.projects.find((p) => p.id === projectId);
       void save(async () => {
         await svc.store!.putInitiative(ini);
-        await svc.store!.putLayout(layout);
+        await svc.store!.putLayout(projectId, layout);
+        if (!s.savedProjects[projectId]) await svc.store!.putProject(projectId, project?.name ?? projectId);
       }, draft.name);
       toast(`${draft.icon} ${draft.name} added to ${ZONE_META[draft.zone].label}`, 'success');
       return id;
@@ -217,7 +311,7 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
       const items = s.items.filter((i) => i.initiativeId === id);
       ui({ activeInitiative: null, activeItem: null });
       void save(async () => {
-        await svc.store!.putLayout(layout);
+        await svc.store!.putLayout(pid(), layout);
         for (const it of items) await svc.store!.deleteItem(it.id);
         await svc.store!.deleteInitiative(id);
       }, ini.name);
@@ -311,7 +405,11 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
         /* keep cached */
       }
     },
-    searchTengu: async (q: string) => (svc.adapter ? svc.adapter.searchTickets(q) : []),
+    searchTengu: async (q: string) => {
+      if (!svc.adapter) return [];
+      const lists = get().projects.find((p) => p.id === get().projectId)?.lists.map((l) => l.id) ?? [];
+      return svc.adapter.searchTickets(q, lists);
+    },
     syncNow: () => svc.engine?.pull(),
     itemStatusLabel: (s: ItemStatus) => ITEM_STATUS[s].label,
   };
@@ -328,8 +426,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     tenguLive: false,
     viewerId: null,
     canEdit: true,
+    projects: [],
+    projectId: null,
+    tenguProjects: null,
+    projectsError: null,
+    savedProjects: {},
+    layouts: {},
+    allInitiatives: [],
     initiatives: [],
-    layout: null,
     items: [],
     settings: DEFAULT_SETTINGS,
     names: {},
@@ -372,6 +476,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         onState: (snapshot) => dispatch({ type: 'sync', snapshot }),
       }, adapter.live ? 90_000 : 30_000);
       svc.engine.start();
+      void actions.reloadProjects();
       unsub = store.subscribe(
         (snap) => {
           dispatch({ type: 'data', snap });

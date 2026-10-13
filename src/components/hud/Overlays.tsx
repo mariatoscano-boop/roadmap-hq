@@ -15,6 +15,7 @@ export function Toasts() {
 
 const SHORTCUTS: [string, string][] = [
   ['/', 'Search'],
+  ['P', 'Switch project'],
   ['A', 'Add work'],
   ['N', 'New initiative'],
   ['S', 'Refresh from Tengu'],

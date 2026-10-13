@@ -6,6 +6,7 @@ import { byZone, monthLabel, ZONE_META, ZONES } from '../../lib/roadmap';
 import type { Zone } from '../../types/roadmap';
 import { Building, buildingHeight, D, HEALTH_COLOR } from './Building';
 
+let worldShown = false;
 const WORLD_W = 1640;
 const WORLD_H = 980;
 const CX = 860;
@@ -62,8 +63,10 @@ export function World() {
   const [hover, setHover] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [entering, setEntering] = useState<string | null>(null);
-  const [live, setLive] = useState(false);
+  // The slow reveal plays once per visit; switching projects rebuilds the city quickly.
+  const [live, setLive] = useState(worldShown);
   useEffect(() => {
+    worldShown = true;
     const h = window.setTimeout(() => setLive(true), 2600);
     return () => window.clearTimeout(h);
   }, []);
@@ -322,7 +325,7 @@ export function World() {
       </div>
       {state.ready && state.initiatives.length === 0 && (
         <div className="world-empty" onPointerDown={(e) => e.stopPropagation()}>
-          <h2>No initiatives yet</h2>
+          <h2>No initiatives in {state.projects.find((p) => p.id === state.projectId)?.name ?? 'this project'} yet</h2>
           <p>Each initiative becomes a building. Put the most important ones in NOW.</p>
           {state.canEdit && <button className="btn btn-primary" onClick={() => actions.openModal('new-initiative')}>+ New initiative</button>}
         </div>

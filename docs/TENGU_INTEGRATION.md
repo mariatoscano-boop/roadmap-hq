@@ -64,12 +64,16 @@ failures.)
 ## How the published page talks to Tengu
 
 The page runs as a claude.ai Artifact and declares the `mcp` capability for the **Tengu OS**
-connector with three read tools: `get_task`, `list_tasks` and `search`. Each viewer's calls run
+connector with four read tools: `list_lists`, `get_task`, `list_tasks` and `search`. Each viewer's calls run
 with **their own** Tengu connection. The page never holds a token, and nobody needs a backend.
 The first time someone opens the page, claude.ai asks them to allow Tengu for it.
 
-- **Add work** searches with `list_tasks { text, limit: 20 }`, which returns status and assignee.
-  It also calls `search`, which covers more lists but returns only id, title and url.
+- **Projects** are Tengu spaces. `list_lists` is grouped by `space`, and each project's id is a
+  slug of the space name (`fiji`, `dosify`). A space that disappears from Tengu keeps its saved
+  roadmap and is marked "not found in your Tengu".
+- **Add work** runs `list_tasks { text, list_id }` for each of the project's lists, which returns
+  status and assignee. It also calls `search` across all of Tengu, which returns only id, title
+  and url; those hits show under "More from Tengu".
 - Linked tickets are refreshed with `get_task` every 90 seconds (Tengu has no webhooks).
 - The page doesn't write to Tengu. "Open in Tengu" uses the ticket's `url`. Tengu returns relative
   urls (`/tasks/…`) for its own lists, so the page joins them to the web address set in Settings.

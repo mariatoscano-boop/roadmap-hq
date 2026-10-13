@@ -1,6 +1,7 @@
 import { useInitiativeViews } from '../../app/selectors';
 import { useStore, type Mode } from '../../app/store';
 import { SyncIndicator } from '../sync/SyncIndicator';
+import { ProjectSwitcher } from './ProjectSwitcher';
 
 const MODES: { id: Mode; label: string }[] = [
   { id: 'world', label: 'World' },
@@ -22,6 +23,7 @@ export function TopBar() {
         <span className="brand-mark" aria-hidden>◆</span>
         <span className="brand-name">PRODUCT HQ</span>
       </div>
+      <ProjectSwitcher />
       <div className="mode-switch" role="tablist" aria-label="View">
         {MODES.map((m) => (
           <button key={m.id} role="tab" aria-selected={state.mode === m.id} className={state.mode === m.id ? 'on' : ''} onClick={() => { actions.enterInitiative(null); actions.setMode(m.id); }}>

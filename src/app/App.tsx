@@ -52,7 +52,7 @@ export function App() {
       <main className="stage">
         {!state.ready ? (
           <div className="loading" role="status">Opening Product HQ…</div>
-        ) : state.mode === 'world' ? <World /> : state.activeInitiative ? null : state.mode === 'list' ? <ListView /> : <Timeline />}
+        ) : state.mode === 'world' ? <World key={state.projectId ?? ''} /> : state.activeInitiative ? null : state.mode === 'list' ? <ListView /> : <Timeline />}
         {state.activeInitiative && <InitiativeView key={state.activeInitiative} />}
       </main>
       <StatusBanner />

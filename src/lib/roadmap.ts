@@ -66,4 +66,12 @@ export function currentMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/** Project id for a Tengu space name: "Prizmstack Internal" → "prizmstack-internal". */
+export function projectSlug(space: string): string {
+  return space.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
+}
+
+/** The roadmap that existed before projects were added belongs to Fiji. */
+export const LEGACY_PROJECT = 'fiji';
+
 export const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;

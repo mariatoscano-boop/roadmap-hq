@@ -12,6 +12,9 @@ by status (flowing = active, red dashes = blocked, solid = done).
 
 ## How it works for the team
 
+- **Projects** (`P`): each Tengu space (Fiji, Dosify, …) has its own roadmap. The switcher lists
+  your Tengu spaces automatically, so a new space in Tengu shows up without setup. Add work
+  searches the current project's Tengu lists first, then the rest of Tengu.
 - **Add work** (`A`): type what the work is. Press Enter to add it as a plain roadmap item, or
   pick matching Tengu tickets from the list under the box to link them. A plain item can be linked
   to a Tengu ticket later.
@@ -45,6 +48,7 @@ Locally it runs on sample data.
 | Key | Action |
 |---|---|
 | `/` | Search initiatives, work, people |
+| `P` | Switch project |
 | `A` | Add work |
 | `N` | New initiative |
 | `S` | Refresh from Tengu |
@@ -86,7 +90,8 @@ Saved in the Artifact's database:
 
 | Path | What |
 |---|---|
-| `initiatives/{id}` | name, icon, place, priority, status, owner, target month, summary |
-| `layout/roadmap` | `{ now: [ids], next: [ids], later: [ids] }`, the ranking (one save per move) |
+| `projects/{projectId}` | name of a project (Tengu space) the roadmap has data for |
+| `initiatives/{id}` | projectId, name, icon, place, priority, status, owner, target month, summary |
+| `layout/{projectId}` | `{ now: [ids], next: [ids], later: [ids] }`: that project's ranking (one save per move) |
 | `items/{id}` | initiativeId, title, status, owner, optional `tengu: { id, key, url }` |
 | `settings/app` | `tenguBaseUrl` for "Open in Tengu" on relative links |

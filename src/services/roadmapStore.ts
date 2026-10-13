@@ -6,13 +6,18 @@
  * - LocalRoadmapStore: this browser only (local dev), seeded with sample data.
  */
 import { MOCK_INITIATIVES, MOCK_ITEMS } from '../data/mock';
-import { layoutOf } from '../lib/roadmap';
+import { LEGACY_PROJECT, layoutOf } from '../lib/roadmap';
 import type { Initiative, RoadmapItem, RoadmapLayout, Settings } from '../types/roadmap';
 import { useCapability } from './runtime';
 
+/** Projects the roadmap has data for (so they still show if Tengu is unreachable). */
+export type SavedProjects = Record<string, { name: string }>;
+
 export interface RoadmapSnapshot {
   initiatives: Initiative[];
-  layout: RoadmapLayout | null;
+  /** Project id → its NOW / NEXT / LATER layout. */
+  layouts: Record<string, RoadmapLayout>;
+  projects: SavedProjects;
   items: RoadmapItem[];
   settings: Settings;
   /** All collections delivered at least once. */
@@ -32,7 +37,8 @@ export interface RoadmapStore {
   subscribe(next: (s: RoadmapSnapshot) => void, error: (message: string) => void): () => void;
   putInitiative(i: Initiative): Promise<void>;
   deleteInitiative(id: string): Promise<void>;
-  putLayout(l: RoadmapLayout): Promise<void>;
+  putLayout(projectId: string, l: RoadmapLayout): Promise<void>;
+  putProject(id: string, name: string): Promise<void>;
   putItem(item: RoadmapItem): Promise<void>;
   deleteItem(id: string): Promise<void>;
   putSettings(s: Settings): Promise<void>;
@@ -75,27 +81,40 @@ export class SharedRoadmapStore implements RoadmapStore {
   }
 
   subscribe(next: (s: RoadmapSnapshot) => void, error: (message: string) => void) {
-    const state: RoadmapSnapshot = { initiatives: [], layout: null, items: [], settings: DEFAULT_SETTINGS, ready: false };
+    const state: RoadmapSnapshot = { initiatives: [], layouts: {}, projects: {}, items: [], settings: DEFAULT_SETTINGS, ready: false };
     const seen = new Set<string>();
     const emit = (part: string) => {
       seen.add(part);
-      state.ready = seen.size === 4;
+      state.ready = seen.size === 5;
       next({ ...state });
     };
     const fail = (e: { code?: string }) =>
       error(e?.code === 'revoked' ? 'Your access to this roadmap changed. Reload the page.' : 'Live updates stopped. Reload the page to reconnect.');
     const unsubs = [
       this.db.collection('initiatives').onSnapshot((snap: any) => {
-        state.initiatives = snap.docs.map((d: any) => ({ ...d.data(), id: d.id }) as Initiative);
+        state.initiatives = snap.docs.map((d: any) => {
+          const data = d.data();
+          return { ...data, projectId: data.projectId || LEGACY_PROJECT, id: d.id } as Initiative;
+        });
         emit('initiatives');
       }, fail),
       this.db.collection('items').onSnapshot((snap: any) => {
         state.items = snap.docs.map((d: any) => ({ ...d.data(), id: d.id }) as RoadmapItem);
         emit('items');
       }, fail),
-      this.db.doc('layout/roadmap').onSnapshot((d: any) => {
-        state.layout = d.exists ? (d.data() as RoadmapLayout) : null;
+      this.db.collection('layout').onSnapshot((snap: any) => {
+        const layouts: Record<string, RoadmapLayout> = {};
+        for (const d of snap.docs) layouts[d.id === 'roadmap' ? LEGACY_PROJECT : d.id] ??= d.data() as RoadmapLayout;
+        // A project's own layout wins over the pre-projects "roadmap" one.
+        for (const d of snap.docs) if (d.id !== 'roadmap') layouts[d.id] = d.data() as RoadmapLayout;
+        state.layouts = layouts;
         emit('layout');
+      }, fail),
+      this.db.collection('projects').onSnapshot((snap: any) => {
+        const projects: SavedProjects = {};
+        for (const d of snap.docs) projects[d.id] = { name: String(d.data()?.name ?? d.id) };
+        state.projects = projects;
+        emit('projects');
       }, fail),
       this.db.doc('settings/app').onSnapshot((d: any) => {
         state.settings = d.exists ? { ...DEFAULT_SETTINGS, ...(d.data() as Settings) } : DEFAULT_SETTINGS;
@@ -118,8 +137,11 @@ export class SharedRoadmapStore implements RoadmapStore {
   deleteInitiative(id: string) {
     return this.queue(`initiatives/${id}`, () => this.db.doc(`initiatives/${id}`).delete());
   }
-  putLayout(l: RoadmapLayout) {
-    return this.queue('layout/roadmap', () => this.db.doc('layout/roadmap').set({ now: l.now, next: l.next, later: l.later }));
+  putLayout(projectId: string, l: RoadmapLayout) {
+    return this.queue(`layout/${projectId}`, () => this.db.doc(`layout/${projectId}`).set({ now: l.now, next: l.next, later: l.later }));
+  }
+  putProject(id: string, name: string) {
+    return this.queue(`projects/${id}`, () => this.db.doc(`projects/${id}`).set({ name }));
   }
   putItem(item: RoadmapItem) {
     return this.queue(`items/${item.id}`, () => this.db.doc(`items/${item.id}`).set(strip(item)));
@@ -134,7 +156,15 @@ export class SharedRoadmapStore implements RoadmapStore {
 
 // ── Local (this browser) ──────────────────────────────────────────────────────
 
-const KEY = 'producthq.local.v2';
+const KEY = 'producthq.local.v3';
+const sample = (): RoadmapSnapshot => ({
+  initiatives: MOCK_INITIATIVES,
+  layouts: { [LEGACY_PROJECT]: layoutOf(MOCK_INITIATIVES) },
+  projects: { [LEGACY_PROJECT]: { name: 'Fiji' } },
+  items: MOCK_ITEMS,
+  settings: DEFAULT_SETTINGS,
+  ready: true,
+});
 
 export class LocalRoadmapStore implements RoadmapStore {
   readonly kind = 'local';
@@ -149,8 +179,8 @@ export class LocalRoadmapStore implements RoadmapStore {
       saved = null;
     }
     this.state = saved?.initiatives
-      ? { initiatives: saved.initiatives, layout: saved.layout ?? null, items: saved.items ?? [], settings: saved.settings ?? DEFAULT_SETTINGS, ready: true }
-      : { initiatives: MOCK_INITIATIVES, layout: layoutOf(MOCK_INITIATIVES), items: MOCK_ITEMS, settings: DEFAULT_SETTINGS, ready: true };
+      ? { ...sample(), ...saved, ready: true }
+      : sample();
   }
 
   async viewer(): Promise<Viewer> {
@@ -184,8 +214,11 @@ export class LocalRoadmapStore implements RoadmapStore {
   async deleteInitiative(id: string) {
     this.commit({ initiatives: this.state.initiatives.filter((x) => x.id !== id) });
   }
-  async putLayout(layout: RoadmapLayout) {
-    this.commit({ layout });
+  async putLayout(projectId: string, layout: RoadmapLayout) {
+    this.commit({ layouts: { ...this.state.layouts, [projectId]: layout } });
+  }
+  async putProject(id: string, name: string) {
+    this.commit({ projects: { ...this.state.projects, [id]: { name } } });
   }
   async putItem(item: RoadmapItem) {
     const rest = this.state.items.filter((x) => x.id !== item.id);
@@ -199,7 +232,7 @@ export class LocalRoadmapStore implements RoadmapStore {
   }
 
   reset() {
-    this.commit({ initiatives: MOCK_INITIATIVES, layout: layoutOf(MOCK_INITIATIVES), items: MOCK_ITEMS, settings: DEFAULT_SETTINGS });
+    this.commit(sample());
   }
 }
 

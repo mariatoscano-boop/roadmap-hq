@@ -9,8 +9,23 @@ export type InitiativeStatus = 'Discovery' | 'Planning' | 'In Progress' | 'Pause
 
 export type Health = 'healthy' | 'at-risk' | 'blocked';
 
+/**
+ * A project = one Tengu space (Fiji, Dosify, …). Each project has its own roadmap.
+ * The list of projects comes from Tengu; ids are slugs of the space name.
+ */
+export interface Project {
+  id: string;
+  name: string;
+  /** The space's Tengu lists — Add work searches these first. */
+  lists: { id: string; name: string }[];
+  /** Still visible in Tengu for this viewer (false = only known from saved roadmap data). */
+  inTengu: boolean;
+}
+
 export interface Initiative {
   id: string;
+  /** The project (Tengu space) this initiative belongs to. */
+  projectId: string;
   name: string;
   icon: string;
   /** The place in Product HQ, e.g. "Marketplace District". */
@@ -31,7 +46,7 @@ export interface Initiative {
   updatedBy?: string | null;
 }
 
-/** NOW / NEXT / LATER order, kept in one record so a move is a single save. */
+/** NOW / NEXT / LATER order for one project, kept in one record so a move is a single save. */
 export type RoadmapLayout = Record<Zone, string[]>;
 
 /** Status of a roadmap item that isn't linked to Tengu. */
