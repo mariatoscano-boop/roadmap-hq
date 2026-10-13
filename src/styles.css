@@ -90,9 +90,9 @@ select option { background: #11162b; }
 input[type='date'] { color-scheme: dark; }
 
 /* ───────────────────────────── Shell ───────────────────────────── */
-.app { position: fixed; inset: 0; }
+.app { position: fixed; inset: 0; background: var(--bg); }
 .topbar {
-  position: fixed; top: 0; left: 0; right: 0; height: 56px; z-index: 30;
+  position: fixed; top: env(safe-area-inset-top, 0px); left: 0; right: 0; height: 56px; z-index: 30;
   display: flex; align-items: center; gap: 18px; padding: 0 16px;
   background: linear-gradient(to bottom, rgba(6, 9, 20, 0.92), rgba(6, 9, 20, 0.6));
   border-bottom: 1px solid var(--line);
@@ -118,7 +118,7 @@ input[type='date'] { color-scheme: dark; }
   border-radius: 9px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03); color: var(--muted);
 }
 .search-btn:hover { border-color: var(--line-2); color: var(--text-2); }
-.stage { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; overflow: hidden; }
+.stage { position: fixed; top: calc(56px + env(safe-area-inset-top, 0px)); left: 0; right: 0; bottom: 0; overflow: hidden; }
 
 /* Sync indicator */
 .sync {
