@@ -1,5 +1,7 @@
 // Builds a single self-contained page (CSS + JS inlined) for publishing as a claude.ai Artifact.
-// Usage: npm run build && node scripts/build-artifact.mjs  →  dist/product-hq.html
+// Usage: npm run build && node scripts/build-artifact.mjs
+//   → dist/product-hq.html             (page body, for publishing as an Artifact)
+//   → dist/product-hq-standalone.html  (full document: open it directly in a browser; sample mode)
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
 const assets = readdirSync('dist/assets');
@@ -17,3 +19,16 @@ const html = `<title>Product HQ</title>
 `;
 writeFileSync('dist/product-hq.html', html);
 console.log(`dist/product-hq.html ${(html.length / 1024).toFixed(0)} KB`);
+
+const standalone = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+</head>
+<body>
+${html}</body>
+</html>
+`;
+writeFileSync('dist/product-hq-standalone.html', standalone);
+console.log(`dist/product-hq-standalone.html ${(standalone.length / 1024).toFixed(0)} KB`);

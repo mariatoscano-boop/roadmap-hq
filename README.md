@@ -34,7 +34,8 @@ by status (flowing = active, red dashes = blocked, solid = done).
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + production build
-npm run build:artifact   # single-file page for publishing as a claude.ai Artifact
+npm run build:artifact   # dist/product-hq.html (for publishing as a claude.ai Artifact)
+                         # + dist/product-hq-standalone.html (open directly; sample data)
 ```
 
 Locally it runs on sample data.
