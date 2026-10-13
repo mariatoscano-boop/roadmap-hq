@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../../app/store';
+import { TenguStatusCard } from '../sync/TenguStatus';
 
 export function SettingsModal() {
   const { state, actions } = useStore();
@@ -35,10 +36,15 @@ export function SettingsModal() {
         <div className="settings-block">
           <h4>Tengu</h4>
           <p>
-            {state.tenguLive
-              ? 'Connected through your own Tengu account. Linked tickets refresh every couple of minutes.'
-              : 'Using sample tickets. In the published page, Tengu connects through each viewer’s own account.'}
+            {state.tengu.state === 'connected'
+              ? '✓ Connected through your own Tengu account. Linked tickets refresh every couple of minutes.'
+              : state.tengu.state === 'sample'
+                ? 'Using sample tickets. In the published page, Tengu connects through each viewer’s own account.'
+                : state.tengu.state === 'checking'
+                  ? 'Connecting to Tengu with your own account…'
+                  : 'Each person connects with their own Tengu account.'}
           </p>
+          <TenguStatusCard />
           <label className="field">
             <span>Tengu web address</span>
             <input id="tengu-base" placeholder="https://your-tengu-address" value={base} onChange={(e) => setBase(e.target.value)} disabled={!state.canEdit} />

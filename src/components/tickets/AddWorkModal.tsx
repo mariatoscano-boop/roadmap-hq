@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../app/store';
 import type { TenguTicket } from '../../types/tengu';
+import { TenguStatusCard, tenguReady } from '../sync/TenguStatus';
 import { Avatar, ROLE_COLOR } from './ticketUi';
 
 /**
@@ -35,10 +36,15 @@ export function AddWorkModal() {
   const project = state.projects.find((p) => p.id === state.projectId);
   const projectLists = new Set(project?.lists.map((l) => l.id) ?? []);
 
+  const tenguOk = tenguReady(state.tengu.state);
   useEffect(() => input.current?.focus(), []);
   useEffect(() => {
     let live = true;
     setError(null);
+    if (!tenguOk) {
+      setResults([]);
+      return;
+    }
     const h = window.setTimeout(() => {
       setResults(null);
       actions.searchTengu(q).then(
@@ -50,7 +56,7 @@ export function AddWorkModal() {
       live = false;
       window.clearTimeout(h);
     };
-  }, [q, actions]);
+  }, [q, actions, tenguOk]);
 
   const sorted = (results ?? []).slice().sort((a, b) => Number(linkedHere.has(a.id)) - Number(linkedHere.has(b.id)));
   // Tickets from this project's Tengu lists first; everything else Tengu found after.
@@ -127,9 +133,10 @@ export function AddWorkModal() {
 
         <div className="add-section-head">
           {linkMode ? `Tengu tickets in ${project?.name ?? 'this project'}` : q.trim() ? `Or link matching Tengu tickets in ${project?.name ?? 'this project'}` : `Recent Tengu tickets in ${project?.name ?? 'this project'}`}
-          {!state.tenguLive && <span className="sample-tag">sample data</span>}
+          {state.tengu.state === 'sample' && <span className="sample-tag">sample data</span>}
         </div>
-        <div className="link-results">
+        {!tenguOk && <TenguStatusCard />}
+        <div className="link-results" hidden={!tenguOk}>
           {results === null && !error && <div className="skeleton-list"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div>}
           {error && <div className="inline-error">{error} You can still add roadmap items without a link.</div>}
           {results?.length === 0 && !error && <div className="palette-empty">No Tengu tickets match “{q}”.</div>}

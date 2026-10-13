@@ -4,7 +4,8 @@ import { isComplete } from '../lib/progress';
 import { applyLayout, LEGACY_PROJECT, layoutOf, moveInitiative, uid, ZONE_META } from '../lib/roadmap';
 import { createRoadmapStore, DEFAULT_SETTINGS, LocalRoadmapStore, type RoadmapSnapshot, type RoadmapStore, type SavedProjects } from '../services/roadmapStore';
 import { SyncEngine, type SyncSnapshot } from '../services/sync';
-import { createTenguAdapter, type TenguAdapter } from '../services/tengu';
+import { useCapability } from '../services/runtime';
+import { createTenguAdapter, stateForCode, TENGU_SERVER, type TenguAdapter, type TenguState } from '../services/tengu';
 import type { Initiative, ItemStatus, Project, RoadmapItem, RoadmapLayout, Settings, Zone } from '../types/roadmap';
 import type { TenguTicket } from '../types/tengu';
 
@@ -20,7 +21,8 @@ export interface Toast {
 export interface AppState {
   ready: boolean;
   storeKind: 'shared' | 'local' | null;
-  tenguLive: boolean;
+  /** How this viewer is connected to Tengu, and what to tell them if they aren't. */
+  tengu: { state: TenguState; message: string | null };
   viewerId: string | null;
   /** False once the platform (or a refused save) says this viewer can't change the roadmap. */
   canEdit: boolean;
@@ -60,7 +62,8 @@ export interface AppState {
 type UiPatch = Partial<Pick<AppState, 'mode' | 'activeInitiative' | 'activeItem' | 'modal' | 'modalTarget' | 'spotlight'>>;
 
 type Action =
-  | { type: 'boot'; storeKind: 'shared' | 'local'; tenguLive: boolean }
+  | { type: 'boot'; storeKind: 'shared' | 'local' }
+  | { type: 'tengu'; state: TenguState; message: string | null }
   | { type: 'viewer'; id: string | null; canEdit: boolean }
   | { type: 'data'; snap: RoadmapSnapshot }
   | { type: 'tenguProjects'; projects: Project[] | null; error: string | null }
@@ -135,7 +138,9 @@ const itemDone = (i: RoadmapItem, tickets: Record<string, TenguTicket>) =>
 function reducer(state: AppState, a: Action): AppState {
   switch (a.type) {
     case 'boot':
-      return { ...state, storeKind: a.storeKind, tenguLive: a.tenguLive };
+      return { ...state, storeKind: a.storeKind };
+    case 'tengu':
+      return state.tengu.state === a.state && state.tengu.message === a.message ? state : { ...state, tengu: { state: a.state, message: a.message } };
     case 'viewer':
       return { ...state, viewerId: a.id, canEdit: a.canEdit };
     case 'data': {
@@ -204,8 +209,32 @@ function reducer(state: AppState, a: Action): AppState {
 
 interface Services {
   store: RoadmapStore | null;
-  adapter: TenguAdapter | null;
+  adapter: (TenguAdapter & { server: string | null }) | null;
   engine: SyncEngine | null;
+}
+
+/** Wrap an adapter so every call reports whether Tengu answered. */
+function tracked<T extends TenguAdapter & { server: string | null }>(a: T, ok: () => void, fail: (e: unknown) => void): T {
+  const wrap = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A) => {
+    try {
+      const r = await fn(...args);
+      ok();
+      return r;
+    } catch (e) {
+      fail(e);
+      throw e;
+    }
+  };
+  return {
+    ...a,
+    name: a.name,
+    live: a.live,
+    server: a.server,
+    getProjects: wrap(a.getProjects.bind(a)),
+    getTicket: wrap(a.getTicket.bind(a)),
+    getTicketsByIds: wrap(a.getTicketsByIds.bind(a)),
+    searchTickets: wrap(a.searchTickets.bind(a)),
+  };
 }
 
 function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: Services) {
@@ -239,6 +268,14 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
     }
   };
 
+  const reloadProjects = async () => {
+    if (!svc.adapter) return;
+    try {
+      dispatch({ type: 'tenguProjects', projects: await svc.adapter.getProjects(), error: null });
+    } catch (e) {
+      dispatch({ type: 'tenguProjects', projects: get().tenguProjects, error: (e as Error).message });
+    }
+  };
   const itemById = (id: string) => get().items.find((i) => i.id === id);
   const pid = () => get().projectId ?? LEGACY_PROJECT;
 
@@ -247,12 +284,36 @@ function createActions(get: () => AppState, dispatch: (a: Action) => void, svc: 
     ui,
     setMode: (mode: Mode) => ui({ mode }),
     setProject: (id: string) => dispatch({ type: 'project', id }),
-    async reloadProjects() {
-      if (!svc.adapter) return;
+    reloadProjects,
+    /** Try Tengu again (after connecting, allowing, or a hiccup). */
+    async retryTengu() {
+      await reloadProjects();
+      await svc.engine?.pull();
+    },
+    /** Ask the viewer to allow Tengu for this page, or open the Permissions panel if they turned it off. */
+    async allowTengu() {
+      const perms = await useCapability('permissions');
+      const name = `mcp:${svc.adapter?.server ?? TENGU_SERVER}`;
+      if (perms) {
+        const st = await Promise.resolve(perms.state(name)).catch(() => 'unavailable');
+        if (st === 'denied') {
+          try {
+            await perms.manage();
+          } catch {
+            toast('Open this page’s Permissions menu and turn Tengu on, then reload.', 'warn');
+          }
+        } else {
+          await Promise.resolve(perms.request([name])).catch(() => null);
+        }
+      }
+      await reloadProjects();
+      await svc.engine?.pull();
+    },
+    reloadPage() {
       try {
-        dispatch({ type: 'tenguProjects', projects: await svc.adapter.getProjects(), error: null });
-      } catch (e) {
-        dispatch({ type: 'tenguProjects', projects: get().tenguProjects, error: (e as Error).message });
+        location.reload();
+      } catch {
+        toast('Reload the page to try again.', 'info');
       }
     },
     enterInitiative: (id: string | null) => ui({ activeInitiative: id, activeItem: null }),
@@ -423,7 +484,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, () => ({
     ready: false,
     storeKind: null,
-    tenguLive: false,
+    tengu: { state: 'checking', message: null },
     viewerId: null,
     canEdit: true,
     projects: [],
@@ -462,11 +523,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     let unsub = () => {};
     void (async () => {
-      const [store, adapter] = await Promise.all([createRoadmapStore(), createTenguAdapter()]);
+      const [store, boot] = await Promise.all([createRoadmapStore(), createTenguAdapter()]);
       if (cancelled) return;
       svc.store = store;
+      dispatch({ type: 'boot', storeKind: store.kind });
+      dispatch({ type: 'tengu', state: boot.state, message: boot.message });
+      const adapter = tracked(
+        boot.adapter,
+        () => {
+          const cur = stateRef.current.tengu.state;
+          if (cur !== 'sample' && cur !== 'connected') dispatch({ type: 'tengu', state: 'connected', message: null });
+        },
+        (e) => {
+          const code = (e as { code?: string })?.code ?? 'error';
+          if (stateRef.current.tengu.state === 'sample') return;
+          // A brief outage shouldn't hide a working connection behind a setup message.
+          if (code === 'server_unavailable' && stateRef.current.tengu.state === 'connected') return;
+          dispatch({ type: 'tengu', state: stateForCode(code), message: (e as Error)?.message || 'Tengu request failed.' });
+        },
+      );
       svc.adapter = adapter;
-      dispatch({ type: 'boot', storeKind: store.kind, tenguLive: adapter.live });
+      // A viewer who turned Tengu off for this page gets the fix button right away.
+      if (boot.state === 'checking') {
+        void useCapability('permissions').then(async (perms) => {
+          const st = perms ? await Promise.resolve(perms.state(`mcp:${boot.adapter.server ?? TENGU_SERVER}`)).catch(() => null) : null;
+          if (st === 'denied') dispatch({ type: 'tengu', state: 'needs-allow', message: 'Tengu is turned off for this page.' });
+        });
+      }
       svc.engine = new SyncEngine(adapter, {
         onTickets: (tickets) => dispatch({ type: 'tickets', tickets }),
         onRemoteChanges: (tickets) => {
@@ -474,7 +557,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           for (const t of tickets.slice(0, 2)) actions.toast(`${t.key || t.title} is now “${t.status}” in Tengu`, isComplete({ role: t.statusRole }) ? 'success' : 'info');
         },
         onState: (snapshot) => dispatch({ type: 'sync', snapshot }),
-      }, adapter.live ? 90_000 : 30_000);
+      }, boot.adapter.live ? 90_000 : 30_000);
       svc.engine.start();
       void actions.reloadProjects();
       unsub = store.subscribe(

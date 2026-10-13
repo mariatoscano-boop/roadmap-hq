@@ -82,4 +82,25 @@ The first time someone opens the page, claude.ai asks them to allow Tengu for it
 - Not verified yet: the shape of `get_task` comments. No ticket had any during development, so
   the page reads them defensively.
 
-Outside an Artifact (local dev), the app falls back to `MockTenguAdapter` sample data.
+Outside an Artifact (local dev), the app uses `MockTenguAdapter` sample data. **Inside the
+published page it never uses sample data.** When Tengu can't be used, the page says why and
+offers the fix.
+
+## Connection states (per viewer)
+
+| State | Cause | What the viewer sees |
+|---|---|---|
+| connected | Tengu answered | Tickets, live status |
+| needs-allow | Tengu not allowed / turned off for this page (`not_in_manifest`, `consent_required`) | **Allow Tengu** button (asks, or opens the page's Permissions panel) |
+| not-connected | No Tengu connector on their claude.ai account (`server_not_connected`) | "Add Tengu in claude.ai → Settings → Connectors, then reload" |
+| reconnect | Connector credentials expired (`needs_reauth`) | "Reconnect Tengu in Settings → Connectors" |
+| unavailable | This view can't use connectors (`use("mcp")` is null) | "Open the page on claude.ai, signed in to your organization" |
+| error | Tengu returned an error | The message + Try again |
+
+These appear as a banner under the top bar, in Add work, in the item panel and in Settings.
+Plain roadmap items keep working in every state.
+
+### Setting up a coworker
+1. Share the page with them as **Contributor** or **Editor**.
+2. They add the **Tengu** connector to their own claude.ai account (Settings → Connectors).
+3. They open the page and click **Allow Tengu** when asked.

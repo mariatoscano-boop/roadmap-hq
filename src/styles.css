@@ -758,3 +758,15 @@ select:disabled, input:disabled, textarea:disabled, .zone-switch button:disabled
   .ps-btn { max-width: 120px; padding: 0 8px; }
   .brand-mark { display: none; }
 }
+
+/* Tengu connection status */
+.tengu-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.35); margin: 6px 0; }
+.tengu-card-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 181, 71, 0.18); color: var(--amber); font-size: 14px; }
+.tengu-card-text { flex: 1; min-width: 0; display: grid; gap: 2px; font-size: 13px; }
+.tengu-card-text b { color: #ffe2b8; }
+.tengu-card-text span { color: var(--text-2); }
+.tengu-card.is-compact { padding: 8px 8px 8px 12px; margin: 0; background: rgba(28, 22, 14, 0.94); backdrop-filter: blur(10px); box-shadow: 0 16px 40px -18px #000; }
+.tengu-card.is-compact .tengu-card-icon { width: 22px; height: 22px; font-size: 12px; }
+.tengu-card-x { width: 26px; height: 26px; font-size: 11px; }
+.tengu-banner { position: fixed; top: calc(66px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 44; width: min(620px, calc(100vw - 32px)); animation: holo-in 0.25s var(--ease); }
+[hidden] { display: none !important; }

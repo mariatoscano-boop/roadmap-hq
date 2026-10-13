@@ -5,6 +5,7 @@ import { Intro, ShortcutsOverlay, SpotlightChip, StatusBanner, Toasts } from '..
 import { QuickActions } from '../components/hud/QuickActions';
 import { SettingsModal } from '../components/hud/SettingsModal';
 import { TopBar } from '../components/hud/TopBar';
+import { TenguBanner } from '../components/sync/TenguStatus';
 import { ListView } from '../components/list/ListView';
 import { SearchPalette } from '../components/search/SearchPalette';
 import { AddWorkModal } from '../components/tickets/AddWorkModal';
@@ -56,6 +57,7 @@ export function App() {
         {state.activeInitiative && <InitiativeView key={state.activeInitiative} />}
       </main>
       <StatusBanner />
+      <TenguBanner />
       <SpotlightChip />
       <ItemPanel />
       {!state.activeItem && state.canEdit && <QuickActions />}

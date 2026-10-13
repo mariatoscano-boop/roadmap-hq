@@ -34,6 +34,23 @@ export function toMission(item: RoadmapItem, ticket: TenguTicket | undefined, ba
       linked: true,
     };
   }
+  if (item.tengu) {
+    // Linked, but Tengu hasn't answered for this viewer (loading, not connected, or no access).
+    return {
+      id: item.id,
+      item,
+      ticket: null,
+      title: item.title,
+      role: 'planning',
+      statusLabel: 'Not loaded from Tengu',
+      assignee: null,
+      priority: null,
+      dueDate: null,
+      key: item.tengu.key || null,
+      url: ticketUrl(item.tengu.url, base),
+      linked: true,
+    };
+  }
   const s = ITEM_STATUS[item.status] ?? ITEM_STATUS.todo;
   return {
     id: item.id,
@@ -41,12 +58,12 @@ export function toMission(item: RoadmapItem, ticket: TenguTicket | undefined, ba
     ticket: null,
     title: item.title,
     role: s.role,
-    statusLabel: item.tengu ? `${s.label}` : s.label,
+    statusLabel: s.label,
     assignee: item.owner,
     priority: null,
     dueDate: null,
-    key: item.tengu?.key ?? null,
-    url: item.tengu ? ticketUrl(item.tengu.url, base) : null,
-    linked: !!item.tengu,
+    key: null,
+    url: null,
+    linked: false,
   };
 }

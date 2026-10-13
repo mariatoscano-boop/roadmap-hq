@@ -8,15 +8,16 @@
  *   searchTickets(q, ids) → list_tasks { text, list_id } per project list, + search (all of Tengu)
  *
  * Implementations:
- *   - MockTenguAdapter: in-memory sample data (local dev, or when Tengu isn't connected).
+ *   - MockTenguAdapter: in-memory sample data, for local dev only (never inside the published page).
  *   - McpTenguAdapter:  the viewer's own Tengu connector, through the Artifact `mcp` capability.
  *     Calls run with the viewer's credentials; the page never sees a token.
+ *   - UnavailableTenguAdapter: published page where this view can't use connectors at all.
  */
 import { MOCK_LISTS, MOCK_TICKETS } from '../data/mock';
 import { projectSlug } from '../lib/roadmap';
 import type { Project } from '../types/roadmap';
 import type { StatusRole, TenguComment, TenguTicket } from '../types/tengu';
-import { useCapability } from './runtime';
+import { inArtifact, useCapability } from './runtime';
 
 export interface TenguAdapter {
   readonly name: string;
@@ -50,12 +51,47 @@ export class TenguError extends Error {
   }
 }
 
+/** How this viewer's page is connected to Tengu. */
+export type TenguState =
+  | 'sample' // local dev, sample data
+  | 'checking' // published page, first call not answered yet
+  | 'connected'
+  | 'needs-allow' // the viewer hasn't allowed (or turned off) Tengu for this page
+  | 'not-connected' // no Tengu connector on the viewer's claude.ai account
+  | 'reconnect' // connector credentials expired
+  | 'unavailable' // this view can't use connectors at all
+  | 'error';
+
+export function stateForCode(code: string): TenguState {
+  switch (code) {
+    case 'server_not_connected':
+    case 'server_not_found':
+    case 'selection_required':
+      return 'not-connected';
+    case 'needs_reauth':
+      return 'reconnect';
+    case 'not_in_manifest':
+    case 'consent_required':
+    case 'approval_required':
+    case 'permission_denied':
+      return 'needs-allow';
+    case 'not_granted':
+    case 'capability_disabled':
+    case 'capability_removed':
+    case 'mcp_unavailable':
+      return 'unavailable';
+    default:
+      return 'error';
+  }
+}
+
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class MockTenguAdapter implements TenguAdapter {
   readonly name = 'Sample data';
   readonly live = false;
+  readonly server = null;
   private tickets = new Map<string, TenguTicket>(clone(MOCK_TICKETS).map((t) => [t.id, t]));
 
   async getProjects() {
@@ -133,7 +169,7 @@ function mcpError(e: unknown): TenguError {
   const err = e as { code?: string; message?: string };
   const code = err?.code ?? 'error';
   const message =
-    code === 'server_not_connected' ? 'Tengu isn’t connected for you. Add it in claude.ai Settings → Connectors.'
+    code === 'server_not_connected' || code === 'server_not_found' ? 'Tengu isn’t connected to your claude.ai account. Add it in claude.ai Settings → Connectors.'
       : code === 'needs_reauth' ? 'Your Tengu connection expired. Reconnect it in claude.ai Settings → Connectors.'
       : code === 'not_in_manifest' || code === 'consent_required' ? 'Tengu access is turned off for this page. Allow it from the page’s Permissions menu.'
       : code === 'selection_required' ? 'You have more than one Tengu connection. Choose one when claude.ai asks.'
@@ -145,7 +181,7 @@ function mcpError(e: unknown): TenguError {
 export class McpTenguAdapter implements TenguAdapter {
   readonly name = 'Tengu';
   readonly live = true;
-  constructor(private mcp: any, private server: string) {}
+  constructor(private mcp: any, readonly server: string) {}
 
   private async call(tool: string, input: unknown) {
     try {
@@ -218,18 +254,62 @@ export class McpTenguAdapter implements TenguAdapter {
   }
 }
 
-/** Real Tengu when the page runs as an Artifact with the connector available; sample data otherwise. */
-export async function createTenguAdapter(): Promise<TenguAdapter> {
+/** Published page without connector access: every call explains why. */
+export class UnavailableTenguAdapter implements TenguAdapter {
+  readonly name = 'Tengu (unavailable)';
+  readonly live = false;
+  readonly server = TENGU_SERVER;
+  constructor(readonly code: string, private message: string) {}
+  private fail(): never {
+    throw new TenguError(this.message, this.code);
+  }
+  async getProjects(): Promise<Project[]> {
+    return this.fail();
+  }
+  async getTicket(): Promise<TenguTicket> {
+    return this.fail();
+  }
+  async getTicketsByIds(): Promise<{ tickets: TenguTicket[]; failed: string[] }> {
+    return this.fail();
+  }
+  async searchTickets(): Promise<TenguTicket[]> {
+    return this.fail();
+  }
+}
+
+export interface TenguBoot {
+  adapter: TenguAdapter & { server: string | null };
+  state: TenguState;
+  message: string | null;
+}
+
+/**
+ * Local dev → sample data. Published page → the viewer's own Tengu connector, or an adapter that
+ * explains why it can't be reached. The published page never shows sample tickets.
+ */
+export async function createTenguAdapter(): Promise<TenguBoot> {
+  if (!inArtifact()) return { adapter: new MockTenguAdapter(), state: 'sample', message: null };
   const mcp = await useCapability('mcp');
-  if (!mcp) return new MockTenguAdapter();
+  if (!mcp) {
+    const msg = 'Tengu can’t be reached from this view. Open the page on claude.ai, signed in to your organization.';
+    return { adapter: new UnavailableTenguAdapter('mcp_unavailable', msg), state: 'unavailable', message: msg };
+  }
   let server = TENGU_SERVER;
+  let state: TenguState = 'checking';
+  let message: string | null = null;
   try {
     const { servers } = await mcp.listTools();
     const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');
     const match = servers?.find((s: { server: string }) => norm(s.server) === norm(TENGU_SERVER));
-    if (match) server = match.server;
+    if (match) {
+      server = match.server;
+      if (match.authStatus === 'needs_reauth') {
+        state = 'reconnect';
+        message = mcpError({ code: 'needs_reauth' }).message;
+      }
+    }
   } catch {
-    /* use the declared name */
+    /* calls will report the reason */
   }
-  return new McpTenguAdapter(mcp, server);
+  return { adapter: new McpTenguAdapter(mcp, server), state, message };
 }

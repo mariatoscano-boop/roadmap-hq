@@ -3,6 +3,7 @@ import { timeAgo, useMission } from '../../app/selectors';
 import { useStore } from '../../app/store';
 import { ITEM_STATUS, ITEM_STATUSES } from '../../lib/missions';
 import { isOverdue } from '../../lib/progress';
+import { TenguStatusCard } from '../sync/TenguStatus';
 import { Avatar, formatDue, Markdownish, PRIORITY_LABEL, ROLE_COLOR, StatusPill } from './ticketUi';
 
 export function ItemPanel() {
@@ -52,7 +53,7 @@ export function ItemPanel() {
             <div className="panel-status-line">
               <StatusPill role={m.role} label={m.statusLabel} />
               {t && <span className="muted">updated in Tengu {timeAgo(t.updatedAt)}</span>}
-              {!t && <span className="muted">Loading from Tengu…</span>}
+              {!t && <span className="muted">{state.tengu.state === 'connected' || state.tengu.state === 'checking' ? 'Loading from Tengu…' : 'Tengu isn’t connected for you'}</span>}
             </div>
             {m.url ? (
               <a className="btn btn-primary btn-block" href={m.url} target="_blank" rel="noreferrer">Open in Tengu ↗</a>
@@ -66,6 +67,7 @@ export function ItemPanel() {
               <div><span>Status</span><b>{m.statusLabel}</b></div>
               <p className="field-note">Status, assignee and dates come from Tengu. Change them there.</p>
             </section>
+            {!t && <TenguStatusCard />}
             {t?.description && (
               <section className="panel-section">
                 <h4>Description</h4>

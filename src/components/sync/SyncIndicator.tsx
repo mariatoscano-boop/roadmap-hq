@@ -40,10 +40,19 @@ export function SyncIndicator() {
   if (state.saveError && state.saveError !== 'View only') {
     return <span className="sync sync-error" title={state.saveError}>⚠ Not saved</span>;
   }
+  const t = state.tengu.state;
+  if (t === 'needs-allow' || t === 'not-connected' || t === 'reconnect' || t === 'unavailable') {
+    const label = t === 'needs-allow' ? 'Tengu: allow access' : t === 'reconnect' ? 'Tengu: reconnect' : 'Tengu: not connected';
+    return (
+      <button className="sync sync-error" onClick={() => actions.openModal('settings')} title={state.tengu.message ?? undefined}>
+        ⚠ {label}
+      </button>
+    );
+  }
   if (status === 'error') {
     return (
-      <button className="sync sync-error" onClick={() => void actions.syncNow()} title={error ?? undefined}>
-        ⚠ Tengu unavailable — <u>Retry</u>
+      <button className="sync sync-error" onClick={() => void actions.retryTengu()} title={error ?? undefined}>
+        ⚠ Tengu didn’t answer — <u>Retry</u>
       </button>
     );
   }
