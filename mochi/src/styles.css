@@ -624,9 +624,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--l
 }
 
 @media (max-width: 640px) {
-  .pal-card { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 10px; }
-  .pal-card .bubble, .pal-card .room, .pal-card .pal-foot { grid-column: 1; grid-row: auto; }
-  .pal-card .bubble::after { left: 40%; right: auto; top: auto; bottom: -8px; margin-top: 0; transform: rotate(45deg); }
+  /* Phones: bubble beside a smaller room, so today's tasks start higher up. */
+  .pal-card { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); padding: 10px; gap: 10px 12px; }
+  .pal-card .bubble { padding: 10px 12px; font-size: 13.5px; align-self: center; }
+  .pal-card .bubble-link { font-size: 12.5px; }
+  .pal-card .room { grid-row: 1; border-radius: 14px; }
+  .pal-card .pal-foot { grid-column: 1 / -1; grid-row: 2; }
+  .pal-card .pal-foot .btn { min-height: 40px; }
   .group-head .garden { display: none; }
   .project-hero { padding: 18px; }
   .world-decor { width: 120px; height: 86px; }
