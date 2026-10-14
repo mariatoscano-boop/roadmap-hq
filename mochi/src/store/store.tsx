@@ -1,550 +1,397 @@
 /**
- * App state + actions. Persisted state (workspace, tasks, activity, XP, Tengu connection) is saved
- * to this browser. Side effects (Tengu writes, activity, XP, toasts, level-ups) live in the actions
- * so components stay simple. Every action is performed as `me`, the member using the app.
+ * Mochi's state and actions. One person, many worlds. Private quests stay in Mochi.
+ * External quests mirror a linked tool and are the only ones ever written back
+ * (or a private quest you explicitly send). Saved to this browser.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { SEED_MEMBERS, SEED_PROJECTS, SEED_TEAMS, SEED_XP, seedActivity, seedTasks } from '../data/seed';
-import { tengu } from '../integrations/tengu';
-import { memberByName, mergePull, toTenguPriority, toTenguRole } from '../integrations/tengu/mapping';
-import type { TenguTaskPatch } from '../integrations/tengu/types';
-import { dueLabel, today } from '../lib/dates';
-import {
-  doneToday, isDone, levelOf, projectLevel, projectStats, STATUS_LABEL, todayFor, visibleProjects, visibleTasks, XP_PER_CREATE, XP_PER_TASK,
-} from '../lib/selectors';
-import type { Activity, ActivityVerb, Member, Priority, Project, Status, Task, Team, TenguConnection, View } from '../types';
+import { SEED_TOTAL_XP, SEED_WORLD_XP, SEED_WORLDS, seedQuests } from '../data/seed';
+import { INTEGRATIONS, integrationLabel } from '../integrations';
+import { mergePull } from '../integrations/merge';
+import type { ExternalTask } from '../integrations/types';
+import { today } from '../lib/dates';
+import { levelOf, objectsIn, worldLevel, worldStats, XP_PER_QUEST } from '../lib/world';
+import type { Accent, Accessory, IntegrationState, Mood, Quest, Terrain, View, World } from '../types';
 
 export interface AppState {
-  version: 2;
-  me: string;
-  teamId: string;
-  members: Member[];
-  teams: Team[];
-  projects: Project[];
-  tasks: Task[];
-  activity: Activity[];
-  xp: Record<string, number>;
-  /** Milestones reached per project, so a level-up is announced once. */
-  projectLevels: Record<string, number>;
-  tengu: TenguConnection;
-  hiddenTenguIds: string[];
-  pendingTengu: Record<string, TenguTaskPatch>;
-  /** How many scripted teammate events have played. */
-  scriptPlayed: number;
+  version: 3;
+  name: string;
+  worlds: World[];
+  quests: Quest[];
+  worldXp: Record<string, number>;
+  totalXp: number;
+  equipped: Record<string, Accessory[]>;
+  integrations: Record<string, IntegrationState>;
+  /** External quests removed from Mochi (`integrationId:key`); later syncs don't bring them back. */
+  hidden: string[];
+  /** Write-backs that couldn't reach their tool; retried on the next sync. */
+  pending: { integrationId: string; key: string; patch: Partial<Pick<ExternalTask, 'done' | 'title' | 'dueDate' | 'priority'>> }[];
 }
 
 export interface Toast {
   id: number;
   title: string;
   detail?: string;
-  xp?: number;
-  tone?: 'plain' | 'success' | 'level';
+  xp?: string;
+  worldId?: string;
   action?: { label: string; run: () => void };
 }
 
-export interface LevelUp {
+export interface Reaction {
   key: number;
-  kind: 'user' | 'project';
-  title: string;
-  detail: string;
-  color?: string;
+  worldId: string;
+  line: string;
+  mood: Mood;
 }
 
 export interface UiState {
   view: View;
   toasts: Toast[];
-  openTaskId: string | null;
-  composer: { open: boolean; preset?: Partial<Pick<Task, 'projectId' | 'assigneeId' | 'dueDate'>> };
+  openQuestId: string | null;
+  composer: { open: boolean; worldId?: string };
   focus: { ids: string[]; index: number } | null;
-  settingsOpen: boolean;
-  dragTaskId: string | null;
-  xpBump: { key: number; delta: number };
-  levelUp: LevelUp | null;
-  /** Ids that just appeared (tasks or activity) for enter animations. */
+  connectionsOpen: boolean;
+  newWorldOpen: boolean;
+  reaction: Reaction | null;
+  /** "+1" pops on a world (map node, tiles) after something lands there. */
+  pulse: { worldId: string; key: number; text: string } | null;
   fresh: string[];
+  xpBump: number;
 }
 
-export interface NewTask {
+export interface NewQuest {
   title: string;
-  projectId: string;
-  assigneeId: string;
+  worldId: string;
   dueDate: string | null;
-  time: string | null;
-  priority: Priority;
-  /** Create it in Tengu so the team sees it. Otherwise it stays private. */
-  share: boolean;
+  priority: 'normal' | 'high';
+  waitingOn: string | null;
+  /** Also create it in the world's linked tool. Off by default: quests are private. */
+  connect: boolean;
 }
 
-export type TaskPatch = Partial<Pick<Task, 'title' | 'projectId' | 'assigneeId' | 'dueDate' | 'time' | 'priority' | 'notes'>>;
+export type QuestPatch = Partial<Pick<Quest, 'title' | 'worldId' | 'dueDate' | 'priority' | 'waitingOn' | 'notes'>>;
 
-const STORAGE_KEY = 'mochi.v2';
+const KEY = 'mochi.v3';
 
 function seedState(): AppState {
-  const tasks = seedTasks();
   return {
-    version: 2,
-    me: 'maria',
-    teamId: 'all',
-    members: SEED_MEMBERS,
-    teams: SEED_TEAMS,
-    projects: SEED_PROJECTS,
-    tasks,
-    activity: seedActivity(),
-    xp: { ...SEED_XP },
-    projectLevels: Object.fromEntries(SEED_PROJECTS.map((p) => [p.id, projectLevel(p, projectStats(p.id, tasks).pct)])),
-    tengu: { connected: true, lastSyncedAt: new Date(Date.now() - 2 * 60_000).toISOString(), syncing: false },
-    hiddenTenguIds: [],
-    pendingTengu: {},
-    scriptPlayed: 0,
+    version: 3,
+    name: 'Maria',
+    worlds: SEED_WORLDS,
+    quests: seedQuests(),
+    worldXp: { ...SEED_WORLD_XP },
+    totalXp: SEED_TOTAL_XP,
+    equipped: { dosify: ['badge'], fiji: [] },
+    integrations: Object.fromEntries(Object.keys(INTEGRATIONS).map((id) => [id, { id, connected: true, lastSyncedAt: new Date(Date.now() - 2 * 60_000).toISOString(), syncing: false }])),
+    hidden: [],
+    pending: [],
   };
 }
 
-function loadState(): AppState {
+function load(): AppState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(KEY);
     if (raw) {
       const s = JSON.parse(raw) as AppState;
-      if (s.version === 2 && Array.isArray(s.tasks)) return { ...s, tengu: { ...s.tengu, syncing: false } };
+      if (s.version === 3 && Array.isArray(s.quests)) {
+        for (const i of Object.values(s.integrations)) i.syncing = false;
+        return s;
+      }
     }
   } catch {
-    /* fall through to the sample workspace */
+    /* fall back to the sample worlds */
   }
   return seedState();
 }
 
-const VIEWS = ['today', 'work', 'projects', 'team', 'activity'] as const;
 function viewFromHash(): View {
   const h = typeof location !== 'undefined' ? location.hash.slice(1) : '';
-  if (h.startsWith('project-')) return { name: 'project', id: h.slice(8) };
-  return (VIEWS as readonly string[]).includes(h) ? { name: h as (typeof VIEWS)[number] } : { name: 'today' };
+  if (h.startsWith('world-')) return { name: 'world', id: h.slice(6) };
+  return (['today', 'worlds', 'quests', 'collection'] as const).includes(h as never) ? { name: h as 'today' } : { name: 'today' };
 }
-const hashOf = (v: View) => (v.name === 'project' ? `project-${v.id}` : v.name);
-const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+const hashOf = (v: View) => (v.name === 'world' ? `world-${v.id}` : v.name);
+const uid = () => `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+const pick = <T,>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)];
 
-/** Teammates "working" while the app is open: one change every ~40s, then quiet. */
-const SCRIPT: { actorId: string; taskId: string; to: Status }[] = [
-  { actorId: 'bryan', taskId: 't-fiji-6', to: 'done' },
-  { actorId: 'malika', taskId: 't-dos-7', to: 'review' },
-  { actorId: 'bryan', taskId: 't-dos-8', to: 'progress' },
-  { actorId: 'malika', taskId: 't-dos-3', to: 'done' },
-  { actorId: 'natalia', taskId: 't-fiji-8', to: 'progress' },
-];
-
-type Ctx = ReturnType<typeof useBuildStore>;
-const StoreContext = createContext<Ctx | null>(null);
-
+type Ctx = ReturnType<typeof useBuild>;
+const C = createContext<Ctx | null>(null);
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const value = useBuildStore();
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return <C.Provider value={useBuild()}>{children}</C.Provider>;
 }
-
 export function useStore() {
-  const v = useContext(StoreContext);
+  const v = useContext(C);
   if (!v) throw new Error('useStore outside StoreProvider');
   return v;
 }
 
-function useBuildStore() {
-  const [state, setState] = useState<AppState>(loadState);
+function useBuild() {
+  const [state, setState] = useState<AppState>(load);
   const [ui, setUi] = useState<UiState>(() => ({
-    view: viewFromHash(),
-    toasts: [],
-    openTaskId: null,
-    composer: { open: false },
-    focus: null,
-    settingsOpen: false,
-    dragTaskId: null,
-    xpBump: { key: 0, delta: 0 },
-    levelUp: null,
-    fresh: [],
+    view: viewFromHash(), toasts: [], openQuestId: null, composer: { open: false }, focus: null,
+    connectionsOpen: false, newWorldOpen: false, reaction: null, pulse: null, fresh: [], xpBump: 0,
   }));
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const toastId = useRef(0);
+  const ref = useRef(state);
+  ref.current = state;
+  const tid = useRef(0);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      /* storage blocked: the app keeps working for this visit */
-    }
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage blocked */ }
   }, [state]);
-
   useEffect(() => {
-    const onHash = () => setUi((u) => ({ ...u, view: viewFromHash() }));
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    const f = () => setUi((u) => ({ ...u, view: viewFromHash() }));
+    window.addEventListener('hashchange', f);
+    return () => window.removeEventListener('hashchange', f);
   }, []);
 
-  // ───────────── Derived for the current person + team ─────────────
-  const team = state.teams.find((t) => t.id === state.teamId) ?? state.teams[0];
-  const projects = useMemo(() => visibleProjects(state.projects, team, state.me), [state.projects, team, state.me]);
-  const tasks = useMemo(() => visibleTasks(state.tasks, projects, state.me), [state.tasks, projects, state.me]);
-  const members = useMemo(() => state.members.filter((m) => team.memberIds.includes(m.id)), [state.members, team]);
-  const activity = useMemo(() => {
-    const ids = new Set(projects.map((p) => p.id));
-    const priv = new Set(state.tasks.filter((t) => t.source === 'personal' && t.createdBy !== state.me).map((t) => t.id));
-    return state.activity.filter((a) => ids.has(a.projectId) && !(a.taskId && priv.has(a.taskId)));
-  }, [state.activity, state.tasks, projects, state.me]);
-  const me = state.members.find((m) => m.id === state.me)!;
-
-  // ───────────── UI helpers ─────────────
+  // ───────── UI helpers ─────────
   const navigate = useCallback((view: View) => {
-    setUi((u) => ({ ...u, view, openTaskId: null }));
-    try {
-      history.replaceState(null, '', `#${hashOf(view)}`);
-    } catch {
-      /* sandboxed frame: navigation still works in-app */
-    }
+    setUi((u) => ({ ...u, view, openQuestId: null }));
+    try { history.replaceState(null, '', `#${hashOf(view)}`); } catch { /* sandboxed */ }
     window.scrollTo({ top: 0 });
   }, []);
 
   const toast = useCallback((t: Omit<Toast, 'id'>) => {
-    const id = ++toastId.current;
+    const id = ++tid.current;
     setUi((u) => ({ ...u, toasts: [...u.toasts.slice(-2), { ...t, id }] }));
-    window.setTimeout(() => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), t.action ? 5500 : 3200);
+    window.setTimeout(() => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), t.action ? 5200 : 3000);
   }, []);
   const dismissToast = useCallback((id: number) => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), []);
+
+  /** A creature says something and reacts. Every view showing that world's creature responds. */
+  const say = useCallback((worldId: string, line: string, mood: Mood = 'happy') => {
+    const key = Date.now() + Math.random();
+    setUi((u) => ({ ...u, reaction: { key, worldId, line, mood } }));
+    window.setTimeout(() => setUi((u) => (u.reaction?.key === key ? { ...u, reaction: null } : u)), 2600);
+  }, []);
+
+  const pulseWorld = useCallback((worldId: string, text: string) => {
+    const key = Date.now();
+    setUi((u) => ({ ...u, pulse: { worldId, key, text } }));
+    window.setTimeout(() => setUi((u) => (u.pulse?.key === key ? { ...u, pulse: null } : u)), 1600);
+  }, []);
 
   const markFresh = useCallback((ids: string[]) => {
     setUi((u) => ({ ...u, fresh: [...u.fresh, ...ids] }));
     window.setTimeout(() => setUi((u) => ({ ...u, fresh: u.fresh.filter((x) => !ids.includes(x)) })), 1200);
   }, []);
 
-  const showLevelUp = useCallback((l: Omit<LevelUp, 'key'>) => {
-    const key = Date.now();
-    setUi((u) => ({ ...u, levelUp: { ...l, key } }));
-    window.setTimeout(() => setUi((u) => (u.levelUp?.key === key ? { ...u, levelUp: null } : u)), 4200);
+  /** Write back to the quest's tool; queue it if the tool can't be reached. */
+  const writeBack = useCallback((q: Quest, patch: AppState['pending'][number]['patch']) => {
+    if (!q.external) return;
+    const { integrationId, key } = q.external;
+    const queue = () => setState((s) => ({ ...s, pending: [...s.pending, { integrationId, key, patch }] }));
+    if (!ref.current.integrations[integrationId]?.connected) return queue();
+    INTEGRATIONS[integrationId]?.update(key, patch).catch(queue);
   }, []);
 
-  const log = (s: AppState, actorId: string, verb: ActivityVerb, task: Task, detail?: string): Activity[] => {
-    const a: Activity = { id: uid('a'), actorId, verb, taskId: task.id, taskTitle: task.title, projectId: task.projectId, detail, at: new Date().toISOString() };
-    markFresh([a.id]);
-    return [a, ...s.activity].slice(0, 300);
-  };
-
-  /** Write a Tengu-owned change; if Tengu can't be reached, queue it for the next sync. */
-  const writeTengu = useCallback((tenguId: string, patch: TenguTaskPatch) => {
-    const queue = () => setState((s) => ({ ...s, pendingTengu: { ...s.pendingTengu, [tenguId]: { ...s.pendingTengu[tenguId], ...patch } } }));
-    if (!stateRef.current.tengu.connected) return queue();
-    tengu.updateTask(tenguId, patch).catch(queue);
-  }, []);
-
-  /** After tasks change: announce project milestones reached, and keep the stored levels in step. */
-  const checkProjectLevels = (s: AppState, tasks: Task[], projectIds: string[], announce: boolean) => {
-    const levels = { ...s.projectLevels };
-    for (const pid of projectIds) {
-      const p = s.projects.find((x) => x.id === pid);
-      if (!p) continue;
-      const lvl = projectLevel(p, projectStats(pid, tasks).pct);
-      if (announce && lvl > (levels[pid] ?? 0)) {
-        const m = p.milestones[lvl - 1];
-        showLevelUp({ kind: 'project', title: `${p.name} · Level ${lvl}`, detail: lvl === p.milestones.length ? `${m.name}. Every task is done.` : `Milestone reached: ${m.name}`, color: p.color });
-      }
-      levels[pid] = lvl;
+  // ───────── Quests ─────────
+  const toggleDone = useCallback((id: string, opts: { quiet?: boolean } = {}) => {
+    const s = ref.current;
+    const q = s.quests.find((x) => x.id === id);
+    if (!q) return;
+    const done = !q.done;
+    const w = s.worlds.find((x) => x.id === q.worldId)!;
+    const before = worldStats(w.id, s.quests);
+    const quests = s.quests.map((x) => (x.id === id ? { ...x, done, completedAt: done ? new Date().toISOString() : null } : x));
+    const after = worldStats(w.id, quests);
+    const delta = done ? XP_PER_QUEST : -XP_PER_QUEST;
+    const wxBefore = s.worldXp[w.id] ?? 0;
+    const wx = Math.max(0, wxBefore + delta);
+    const total = Math.max(0, s.totalXp + delta);
+    setState({ ...s, quests, worldXp: { ...s.worldXp, [w.id]: wx }, totalXp: total });
+    setUi((u) => ({ ...u, xpBump: u.xpBump + (done ? 1 : 0) }));
+    writeBack(q, { done });
+    if (!done) {
+      if (!opts.quiet) toast({ title: 'Back on your list', detail: q.title, worldId: w.id });
+      return;
     }
-    return levels;
-  };
-
-  // ───────────── Tasks ─────────────
-
-  const setStatus = useCallback(
-    (id: string, status: Status, opts: { quiet?: boolean } = {}) => {
-      const s = stateRef.current;
-      const task = s.tasks.find((t) => t.id === id);
-      if (!task || task.status === status) return;
-      const wasDone = isDone(task);
-      const nowDone = status === 'done';
-      const updated: Task = { ...task, status, completedAt: nowDone ? new Date().toISOString() : wasDone ? null : task.completedAt };
-      const tasks = s.tasks.map((t) => (t.id === id ? updated : t));
-      const xpDelta = nowDone && !wasDone ? XP_PER_TASK : wasDone && !nowDone ? -XP_PER_TASK : 0;
-      const xpBefore = s.xp[s.me] ?? 0;
-      const xp = { ...s.xp, [s.me]: Math.max(0, xpBefore + xpDelta) };
-      const verb: ActivityVerb = nowDone ? 'completed' : wasDone ? 'reopened' : 'moved';
-      const activity = log(s, s.me, verb, updated, verb === 'moved' ? `→ ${STATUS_LABEL[status]}` : undefined);
-      const projectLevels = checkProjectLevels(s, tasks, [task.projectId], nowDone);
-      setState({ ...s, tasks, xp, activity, projectLevels });
-      if (xpDelta) setUi((u) => ({ ...u, xpBump: { key: u.xpBump.key + 1, delta: xpDelta } }));
-      if (task.tengu) writeTengu(task.tengu.id, { statusRole: toTenguRole(status) });
-
-      if (nowDone && levelOf(xp[s.me]) > levelOf(xpBefore)) {
-        showLevelUp({ kind: 'user', title: `Level ${levelOf(xp[s.me])}`, detail: `${xp[s.me].toLocaleString()} XP. You're on a roll.` });
-      }
-      if (opts.quiet) return;
-      if (nowDone) {
-        const mineToday = todayFor(tasks, s.me);
-        const left = mineToday.filter((t) => !isDone(t)).length;
-        const doneCount = tasks.filter((t) => t.assigneeId === s.me && doneToday(t)).length;
-        const title = left === 0 && mineToday.length > 0 ? 'Clean sweep. Today’s done.' : doneCount === 3 ? 'You’re on a roll.' : 'Nice. That’s done.';
-        toast({
-          tone: 'success', title, detail: task.title, xp: XP_PER_TASK,
-          action: { label: 'Undo', run: () => setStatusRef.current(id, task.status, { quiet: true }) },
-        });
-      } else if (verb === 'moved') {
-        toast({ title: `Moved to ${STATUS_LABEL[status]}`, detail: task.title });
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [toast, writeTengu, showLevelUp],
-  );
-  const setStatusRef = useRef(setStatus);
-  setStatusRef.current = setStatus;
-
-  const toggleDone = useCallback((id: string) => {
-    const t = stateRef.current.tasks.find((x) => x.id === id);
-    if (t) setStatus(id, isDone(t) ? 'todo' : 'done');
-  }, [setStatus]);
-
-  const updateTask = useCallback(
-    (id: string, patch: TaskPatch, opts: { announce?: boolean } = {}) => {
-      const s = stateRef.current;
-      const task = s.tasks.find((t) => t.id === id);
-      if (!task) return;
-      if (patch.projectId && patch.projectId !== task.projectId && task.tengu) {
-        toast({ title: 'Tengu tasks stay in their project', detail: `${task.tengu.key} lives in ${s.projects.find((p) => p.id === task.projectId)?.name}` });
-        return;
-      }
-      const updated = { ...task, ...patch };
-      let activity = s.activity;
-      let note = '';
-      if (patch.assigneeId && patch.assigneeId !== task.assigneeId) {
-        const who = s.members.find((m) => m.id === patch.assigneeId)!.name;
-        activity = log({ ...s, activity }, s.me, 'assigned', updated, `→ ${who}`);
-        note = `Assigned to ${who}`;
-      }
-      if (patch.dueDate !== undefined && patch.dueDate !== task.dueDate) {
-        activity = log({ ...s, activity }, s.me, 'scheduled', updated, `→ ${dueLabel(patch.dueDate)}`);
-        note = `Due ${dueLabel(patch.dueDate).toLowerCase()}`;
-      }
-      if (patch.projectId && patch.projectId !== task.projectId) {
-        const pn = s.projects.find((p) => p.id === patch.projectId)!.name;
-        activity = log({ ...s, activity }, s.me, 'moved', updated, `→ ${pn}`);
-        note = `Moved to ${pn}`;
-      }
-      const tasks = s.tasks.map((t) => (t.id === id ? updated : t));
-      setState({ ...s, tasks, activity, projectLevels: checkProjectLevels(s, tasks, [task.projectId, updated.projectId], false) });
-      if (opts.announce && note) toast({ title: note, detail: task.title });
-      if (task.tengu) {
-        const tp: TenguTaskPatch = {};
-        if (patch.title !== undefined) tp.title = patch.title;
-        if (patch.dueDate !== undefined) tp.dueDate = patch.dueDate;
-        if (patch.priority !== undefined) tp.priority = toTenguPriority(patch.priority);
-        if (patch.assigneeId !== undefined) tp.assignee = s.members.find((m) => m.id === patch.assigneeId)?.name ?? null;
-        if (Object.keys(tp).length) writeTengu(task.tengu.id, tp);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [toast, writeTengu],
-  );
-
-  /** Private task → Tengu task, visible to the team. */
-  const shareToTengu = useCallback(
-    async (id: string, given?: Task) => {
-      const s = stateRef.current;
-      const task = given ?? s.tasks.find((t) => t.id === id);
-      const project = task && s.projects.find((p) => p.id === task.projectId);
-      if (!task || !project?.tenguSpaceId) return;
-      if (!s.tengu.connected) {
-        toast({ title: 'Tengu isn’t connected', detail: 'Connect it in Settings to share tasks.' });
-        return;
-      }
-      try {
-        const created = await tengu.createTask({
-          spaceId: project.tenguSpaceId,
-          title: task.title,
-          assignee: s.members.find((m) => m.id === task.assigneeId)?.name ?? null,
-          dueDate: task.dueDate,
-          priority: toTenguPriority(task.priority),
-          statusRole: toTenguRole(task.status),
-        });
-        setState((cur) => ({ ...cur, tasks: cur.tasks.map((t) => (t.id === id ? { ...t, source: 'tengu', tengu: { id: created.id, key: created.key } } : t)) }));
-        toast({ title: `Shared to Tengu as ${created.key}`, detail: 'The team can see it now.' });
-      } catch (e) {
-        toast({ title: 'Couldn’t share to Tengu', detail: `${(e as Error).message} It stays private for now.` });
-      }
-    },
-    [toast],
-  );
-
-  const createTask = useCallback(
-    (n: NewTask): Task => {
-      const s = stateRef.current;
-      const task: Task = {
-        id: uid('t'),
-        title: n.title.trim(),
-        projectId: n.projectId,
-        source: 'personal',
-        status: 'todo',
-        assigneeId: n.assigneeId,
-        createdBy: s.me,
-        dueDate: n.dueDate,
-        time: n.time,
-        priority: n.priority,
-        createdAt: new Date().toISOString(),
-        completedAt: null,
-      };
-      const tasks = [...s.tasks, task];
-      const xp = { ...s.xp, [s.me]: (s.xp[s.me] ?? 0) + XP_PER_CREATE };
-      setState({ ...s, tasks, xp, activity: log(s, s.me, 'created', task), projectLevels: checkProjectLevels(s, tasks, [task.projectId], false) });
-      setUi((u) => ({ ...u, xpBump: { key: u.xpBump.key + 1, delta: XP_PER_CREATE } }));
-      markFresh([task.id]);
-      const project = s.projects.find((p) => p.id === task.projectId)!;
-      if (n.share && project.tenguSpaceId) shareToTengu(task.id, task);
-      return task;
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [markFresh, shareToTengu],
-  );
-
-  const deleteTask = useCallback(
-    (id: string) => {
-      const s = stateRef.current;
-      const idx = s.tasks.findIndex((t) => t.id === id);
-      if (idx < 0) return;
-      const task = s.tasks[idx];
-      setState({ ...s, tasks: s.tasks.filter((t) => t.id !== id), hiddenTenguIds: task.tengu ? [...s.hiddenTenguIds, task.tengu.id] : s.hiddenTenguIds });
-      setUi((u) => ({ ...u, openTaskId: null }));
+    const gain = Math.round((after.pct - before.pct) * 100);
+    if (wxBefore === 0) {
+      say(w.id, `Hello. I’m ${w.creature.name}.`, 'wow');
+      toast({ title: `${w.creature.name} hatched`, detail: `${w.name} has a creature now. See it in Collection.`, worldId: w.id });
+    } else if (worldLevel(wx) > worldLevel(wxBefore)) {
+      say(w.id, 'World updated.', 'wow');
+      toast({ title: `${w.name} reached level ${worldLevel(wx)}`, detail: objectsIn(wx) > objectsIn(wxBefore) ? 'Something new appeared in this world.' : 'World updated.', worldId: w.id });
+    } else {
+      const left = quests.filter((x) => x.worldId === w.id && !x.done && x.dueDate && x.dueDate <= today()).length;
+      say(w.id, left === 0 ? pick(['That’s everything today.', 'Clear. Nice.']) : pick(['Nice.', 'Done.', 'That’s one.', 'Next?']), 'happy');
+    }
+    if (levelOf(total) > levelOf(s.totalXp)) toast({ title: `You reached level ${levelOf(total)}`, detail: `${total.toLocaleString()} ✦ across your worlds.` });
+    if (!opts.quiet) {
       toast({
-        title: task.tengu ? 'Removed from Mochi' : 'Task deleted',
-        detail: task.tengu ? `${task.tengu.key} is still in Tengu.` : task.title,
-        action: {
-          label: 'Undo',
-          run: () =>
-            setState((cur) => {
-              const tasks = [...cur.tasks];
-              tasks.splice(Math.min(idx, tasks.length), 0, task);
-              return { ...cur, tasks, hiddenTenguIds: cur.hiddenTenguIds.filter((h) => h !== task.tengu?.id) };
-            }),
-        },
+        title: 'Nice. That’s done.', detail: q.title, xp: `+${XP_PER_QUEST} ✦ · ${w.name} +${Math.max(0, gain)}%`, worldId: w.id,
+        action: { label: 'Undo', run: () => toggleRef.current(id, { quiet: true }) },
       });
-    },
-    [toast],
-  );
-
-  // ───────────── Tengu connection ─────────────
-
-  const syncNow = useCallback(async () => {
-    const s = stateRef.current;
-    if (!s.tengu.connected || s.tengu.syncing) return;
-    setState((cur) => ({ ...cur, tengu: { ...cur.tengu, syncing: true } }));
-    try {
-      for (const [tid, patch] of Object.entries(s.pendingTengu)) await tengu.updateTask(tid, patch).catch(() => undefined);
-      const pull = await tengu.pull();
-      const cur = stateRef.current;
-      const m = mergePull(cur.tasks, pull, cur.projects, cur.members, cur.hiddenTenguIds);
-      if (m.added.length) markFresh(m.added.map((t) => t.id));
-      const newActs: Activity[] = m.added.map((t) => {
-        const assigner = memberByName(cur.members, 'Bryan')?.id ?? t.assigneeId;
-        return { id: uid('a'), actorId: assigner, verb: 'assigned', taskId: t.id, taskTitle: t.title, projectId: t.projectId, detail: `→ ${cur.members.find((x) => x.id === t.assigneeId)?.name}`, at: pull.syncedAt };
-      });
-      for (const c of m.changed) {
-        if (c.before.status !== c.after.status) {
-          newActs.push({ id: uid('a'), actorId: c.after.assigneeId, verb: c.after.status === 'done' ? 'completed' : 'moved', taskId: c.after.id, taskTitle: c.after.title, projectId: c.after.projectId, detail: c.after.status === 'done' ? undefined : `→ ${STATUS_LABEL[c.after.status]}`, at: pull.syncedAt });
-        }
-      }
-      if (newActs.length) markFresh(newActs.map((a) => a.id));
-      setState({ ...cur, tasks: m.tasks, activity: [...newActs, ...cur.activity], pendingTengu: {}, tengu: { connected: true, syncing: false, lastSyncedAt: pull.syncedAt } });
-      toast({ title: 'Synced with Tengu', detail: pull.notes?.[0] ?? 'Everything is up to date.' });
-    } catch (e) {
-      setState((cur) => ({ ...cur, tengu: { ...cur.tengu, syncing: false } }));
-      toast({ title: 'Sync didn’t work', detail: (e as Error).message });
     }
-  }, [toast, markFresh]);
-  const syncRef = useRef(syncNow);
-  syncRef.current = syncNow;
+  }, [toast, say, writeBack]);
+  const toggleRef = useRef(toggleDone);
+  toggleRef.current = toggleDone;
 
-  const connectTengu = useCallback(async () => {
-    setState((cur) => ({ ...cur, tengu: { ...cur.tengu, syncing: true } }));
-    await tengu.connect();
-    setState((cur) => ({ ...cur, tengu: { ...cur.tengu, connected: true, syncing: false } }));
-    window.setTimeout(() => syncRef.current(), 80);
-  }, []);
-
-  const disconnectTengu = useCallback(async () => {
-    await tengu.disconnect();
-    setState((cur) => ({ ...cur, tengu: { ...cur.tengu, connected: false, syncing: false } }));
-    toast({ title: 'Tengu disconnected', detail: 'Your tasks stay in Mochi. Changes are sent when you reconnect.' });
+  const sendExternal = useCallback(async (id: string, given?: Quest) => {
+    const s = ref.current;
+    const q = given ?? s.quests.find((x) => x.id === id);
+    const w = q && s.worlds.find((x) => x.id === q.worldId);
+    if (!q || !w?.link) return;
+    const { integrationId, ref: r } = w.link;
+    const label = integrationLabel(integrationId);
+    if (!s.integrations[integrationId]?.connected) {
+      toast({ title: `${label} isn’t connected`, detail: 'Connect it in Connections first. The quest stays private.' });
+      return;
+    }
+    try {
+      const t = await INTEGRATIONS[integrationId].create({ ref: r, title: q.title, dueDate: q.dueDate, priority: q.priority });
+      setState((cur) => ({ ...cur, quests: cur.quests.map((x) => (x.id === id ? { ...x, source: 'external', external: { integrationId, key: t.key } } : x)) }));
+      toast({ title: `Connected to ${label} as ${t.key}`, detail: 'This quest is now shared in that tool.', worldId: w.id });
+    } catch (e) {
+      toast({ title: `Couldn’t send to ${label}`, detail: `${(e as Error).message} It stays private.` });
+    }
   }, [toast]);
 
-  // Quiet background sync every 5 minutes.
-  useEffect(() => {
-    const t = window.setInterval(() => syncRef.current(), 5 * 60_000);
-    return () => window.clearInterval(t);
-  }, []);
+  const createQuest = useCallback((n: NewQuest): Quest => {
+    const s = ref.current;
+    const q: Quest = {
+      id: uid(), title: n.title.trim(), worldId: n.worldId, source: 'private', done: false, waitingOn: n.waitingOn,
+      dueDate: n.dueDate, priority: n.priority, createdAt: new Date().toISOString(), completedAt: null,
+    };
+    setState({ ...s, quests: [...s.quests, q] });
+    markFresh([q.id]);
+    if (n.connect) sendExternal(q.id, q);
+    return q;
+  }, [markFresh, sendExternal]);
 
-  // Teammates at work: scripted, one change every ~40s while the page is visible.
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      if (document.hidden) return;
-      const s = stateRef.current;
-      const step = SCRIPT[s.scriptPlayed];
-      if (!step) return;
-      const task = s.tasks.find((x) => x.id === step.taskId);
-      if (!task || task.assigneeId === s.me || task.status === step.to || task.status === 'done') {
-        setState({ ...s, scriptPlayed: s.scriptPlayed + 1 });
-        return;
-      }
-      const updated: Task = { ...task, status: step.to, completedAt: step.to === 'done' ? new Date().toISOString() : null };
-      const tasks = s.tasks.map((x) => (x.id === task.id ? updated : x));
-      const verb: ActivityVerb = step.to === 'done' ? 'completed' : 'moved';
-      const a: Activity = { id: uid('a'), actorId: step.actorId, verb, taskId: task.id, taskTitle: task.title, projectId: task.projectId, detail: verb === 'moved' ? `→ ${STATUS_LABEL[step.to]}` : undefined, at: new Date().toISOString() };
-      markFresh([a.id]);
+  const updateQuest = useCallback((id: string, patch: QuestPatch) => {
+    const s = ref.current;
+    const q = s.quests.find((x) => x.id === id);
+    if (!q) return;
+    if (patch.worldId && patch.worldId !== q.worldId && q.external) {
+      toast({ title: 'This quest belongs to its tool', detail: `${q.external.key} stays in ${s.worlds.find((w) => w.id === q.worldId)?.name}.` });
+      return;
+    }
+    setState({ ...s, quests: s.quests.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+    if (patch.worldId && patch.worldId !== q.worldId) {
+      const w = s.worlds.find((x) => x.id === patch.worldId)!;
+      pulseWorld(w.id, '+1');
+      say(w.id, 'Got it.', 'happy');
+    }
+    const wb: AppState['pending'][number]['patch'] = {};
+    if (patch.title !== undefined) wb.title = patch.title;
+    if (patch.dueDate !== undefined) wb.dueDate = patch.dueDate;
+    if (patch.priority !== undefined) wb.priority = patch.priority;
+    if (Object.keys(wb).length) writeBack(q, wb);
+  }, [toast, pulseWorld, say, writeBack]);
+
+  const deleteQuest = useCallback((id: string) => {
+    const s = ref.current;
+    const idx = s.quests.findIndex((x) => x.id === id);
+    if (idx < 0) return;
+    const q = s.quests[idx];
+    const hid = q.external ? `${q.external.integrationId}:${q.external.key}` : null;
+    setState({ ...s, quests: s.quests.filter((x) => x.id !== id), hidden: hid ? [...s.hidden, hid] : s.hidden });
+    setUi((u) => ({ ...u, openQuestId: null }));
+    toast({
+      title: q.external ? 'Removed from Mochi' : 'Quest deleted',
+      detail: q.external ? `${q.external.key} is still in ${integrationLabel(q.external.integrationId)}.` : q.title,
+      action: {
+        label: 'Undo',
+        run: () => setState((cur) => {
+          const quests = [...cur.quests];
+          quests.splice(Math.min(idx, quests.length), 0, q);
+          return { ...cur, quests, hidden: cur.hidden.filter((h) => h !== hid) };
+        }),
+      },
+    });
+  }, [toast]);
+
+  // ───────── Integrations ─────────
+  const sync = useCallback(async (integrationId: string, opts: { quiet?: boolean } = {}) => {
+    const s = ref.current;
+    const st = s.integrations[integrationId];
+    if (!st?.connected || st.syncing) return;
+    const setI = (patch: Partial<IntegrationState>) => setState((cur) => ({ ...cur, integrations: { ...cur.integrations, [integrationId]: { ...cur.integrations[integrationId], ...patch } } }));
+    setI({ syncing: true });
+    try {
+      const mine = s.pending.filter((p) => p.integrationId === integrationId);
+      for (const p of mine) await INTEGRATIONS[integrationId].update(p.key, p.patch).catch(() => undefined);
+      const pull = await INTEGRATIONS[integrationId].pull();
+      const cur = ref.current;
+      const m = mergePull(cur.quests, integrationId, pull, cur.worlds, cur.hidden);
       setState({
-        ...s,
-        tasks,
-        activity: [a, ...s.activity],
-        xp: verb === 'completed' ? { ...s.xp, [step.actorId]: (s.xp[step.actorId] ?? 0) + XP_PER_TASK } : s.xp,
-        projectLevels: checkProjectLevels(s, tasks, [task.projectId], false),
-        scriptPlayed: s.scriptPlayed + 1,
+        ...cur, quests: m.quests, pending: cur.pending.filter((p) => p.integrationId !== integrationId),
+        integrations: { ...cur.integrations, [integrationId]: { ...cur.integrations[integrationId], syncing: false, lastSyncedAt: pull.syncedAt } },
       });
-    }, 40_000);
-    return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      if (m.added.length) {
+        markFresh(m.added.map((q) => q.id));
+        for (const q of m.added) { pulseWorld(q.worldId, `+${m.added.filter((x) => x.worldId === q.worldId).length}`); say(q.worldId, 'Something new came in.', 'wow'); }
+      }
+      if (!opts.quiet) toast({ title: `Synced with ${integrationLabel(integrationId)}`, detail: pull.notes[0] ?? 'Nothing new.' });
+    } catch (e) {
+      setI({ syncing: false });
+      toast({ title: `${integrationLabel(integrationId)} didn’t sync`, detail: (e as Error).message });
+    }
+  }, [toast, markFresh, pulseWorld, say]);
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
+
+  const syncAll = useCallback(() => {
+    for (const id of Object.keys(ref.current.integrations)) syncRef.current(id);
   }, []);
 
-  // ───────────── Workspace, people, focus ─────────────
-
-  const setMe = useCallback((id: string) => {
-    setState((cur) => ({ ...cur, me: id }));
-    setUi((u) => ({ ...u, openTaskId: null, settingsOpen: false }));
-    const m = stateRef.current.members.find((x) => x.id === id);
-    toast({ title: `Signed in as ${m?.name}`, detail: 'Today and My Work now show their work.' });
+  const setConnected = useCallback(async (integrationId: string, on: boolean) => {
+    setState((cur) => ({ ...cur, integrations: { ...cur.integrations, [integrationId]: { ...cur.integrations[integrationId], syncing: true } } }));
+    await (on ? INTEGRATIONS[integrationId].connect() : INTEGRATIONS[integrationId].disconnect());
+    setState((cur) => ({ ...cur, integrations: { ...cur.integrations, [integrationId]: { ...cur.integrations[integrationId], connected: on, syncing: false } } }));
+    if (on) window.setTimeout(() => syncRef.current(integrationId), 60);
+    else toast({ title: `${integrationLabel(integrationId)} disconnected`, detail: 'Its quests stay in your worlds. Changes are sent when you reconnect.' });
   }, [toast]);
 
-  const setTeam = useCallback((teamId: string) => setState((cur) => ({ ...cur, teamId })), []);
+  useEffect(() => {
+    const t = window.setInterval(() => { for (const id of Object.keys(ref.current.integrations)) syncRef.current(id, { quiet: true }); }, 5 * 60_000);
+    return () => window.clearInterval(t);
+  }, []);
 
-  const startFocus = useCallback((ids: string[]) => ids.length && setUi((u) => ({ ...u, focus: { ids, index: 0 }, openTaskId: null })), []);
-  const nextFocus = useCallback(() => setUi((u) => (u.focus ? { ...u, focus: u.focus.index + 1 < u.focus.ids.length ? { ...u.focus, index: u.focus.index + 1 } : null } : u)), []);
-  const exitFocus = useCallback(() => setUi((u) => ({ ...u, focus: null })), []);
+  // ───────── Worlds & creatures ─────────
+  const createWorld = useCallback((w: { name: string; color: Accent; terrain: Terrain; body: World['creature']['body']; antenna: World['creature']['antenna']; creatureName: string; kind: World['kind'] }) => {
+    const id = `${w.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'world'}-${Date.now().toString(36).slice(-3)}`;
+    const world: World = { id, name: w.name.toUpperCase(), color: w.color, terrain: w.terrain, kind: w.kind, creature: { name: w.creatureName, body: w.body, antenna: w.antenna }, link: null, notes: '', createdAt: new Date().toISOString() };
+    setState((cur) => ({ ...cur, worlds: [...cur.worlds, world], worldXp: { ...cur.worldXp, [id]: 0 } }));
+    setUi((u) => ({ ...u, newWorldOpen: false }));
+    toast({ title: `${world.name} added to your map`, detail: `Finish a quest there to hatch ${w.creatureName}.`, worldId: id });
+    return world;
+  }, [toast]);
+
+  const setNotes = useCallback((worldId: string, notes: string) => setState((cur) => ({ ...cur, worlds: cur.worlds.map((w) => (w.id === worldId ? { ...w, notes } : w)) })), []);
+
+  const toggleAccessory = useCallback((worldId: string, a: Accessory) => {
+    setState((cur) => {
+      const list = cur.equipped[worldId] ?? [];
+      return { ...cur, equipped: { ...cur.equipped, [worldId]: list.includes(a) ? list.filter((x) => x !== a) : [...list, a] } };
+    });
+    say(worldId, pick(['Looking sharp.', 'Oh, nice.', 'I like it.']), 'happy');
+  }, [say]);
 
   const resetDemo = useCallback(() => {
-    if ('reset' in tengu) (tengu as { reset(): void }).reset();
+    for (const p of Object.values(INTEGRATIONS)) p.reset?.();
     setState(seedState());
-    setUi((u) => ({ ...u, toasts: [], openTaskId: null, settingsOpen: false, focus: null }));
+    setUi((u) => ({ ...u, toasts: [], openQuestId: null, connectionsOpen: false, focus: null }));
     navigate({ name: 'today' });
-    toast({ title: 'Workspace reset', detail: 'Back to the sample tasks.' });
+    toast({ title: 'Worlds reset', detail: 'Back to the sample quests.' });
   }, [navigate, toast]);
 
-  const openTask = useCallback((id: string | null) => setUi((u) => ({ ...u, openTaskId: id })), []);
-  const openComposer = useCallback((preset?: UiState['composer']['preset']) => setUi((u) => ({ ...u, composer: { open: true, preset }, openTaskId: null })), []);
-  const closeComposer = useCallback(() => setUi((u) => ({ ...u, composer: { open: false } })), []);
-  const setSettings = useCallback((settingsOpen: boolean) => setUi((u) => ({ ...u, settingsOpen })), []);
-  const setDrag = useCallback((dragTaskId: string | null) => setUi((u) => ({ ...u, dragTaskId })), []);
+  const ux = useMemo(() => ({
+    openQuest: (id: string | null) => setUi((u) => ({ ...u, openQuestId: id })),
+    openComposer: (worldId?: string) => setUi((u) => ({ ...u, composer: { open: true, worldId }, openQuestId: null })),
+    closeComposer: () => setUi((u) => ({ ...u, composer: { open: false } })),
+    startFocus: (ids: string[]) => ids.length && setUi((u) => ({ ...u, focus: { ids, index: 0 }, openQuestId: null })),
+    nextFocus: () => setUi((u) => (u.focus && u.focus.index + 1 < u.focus.ids.length ? { ...u, focus: { ...u.focus, index: u.focus.index + 1 } } : { ...u, focus: null })),
+    exitFocus: () => setUi((u) => ({ ...u, focus: null })),
+    setConnections: (connectionsOpen: boolean) => setUi((u) => ({ ...u, connectionsOpen })),
+    setNewWorld: (newWorldOpen: boolean) => setUi((u) => ({ ...u, newWorldOpen })),
+  }), []);
 
-  const actions = useMemo(
-    () => ({
-      navigate, toast, dismissToast, setStatus, toggleDone, updateTask, createTask, deleteTask, shareToTengu,
-      syncNow, connectTengu, disconnectTengu, setMe, setTeam, startFocus, nextFocus, exitFocus, resetDemo,
-      openTask, openComposer, closeComposer, setSettings, setDrag,
-    }),
-    [navigate, toast, dismissToast, setStatus, toggleDone, updateTask, createTask, deleteTask, shareToTengu, syncNow, connectTengu, disconnectTengu, setMe, setTeam, startFocus, nextFocus, exitFocus, resetDemo, openTask, openComposer, closeComposer, setSettings, setDrag],
-  );
+  const actions = useMemo(() => ({
+    navigate, toast, dismissToast, say, pulseWorld, toggleDone, createQuest, updateQuest, deleteQuest, sendExternal,
+    sync, syncAll, setConnected, createWorld, setNotes, toggleAccessory, resetDemo, ...ux,
+  }), [navigate, toast, dismissToast, say, pulseWorld, toggleDone, createQuest, updateQuest, deleteQuest, sendExternal, sync, syncAll, setConnected, createWorld, setNotes, toggleAccessory, resetDemo, ux]);
 
-  const memberOf = useCallback((id: string) => state.members.find((m) => m.id === id) ?? state.members[0], [state.members]);
-  const projectOf = useCallback((id: string) => state.projects.find((p) => p.id === id) ?? state.projects[0], [state.projects]);
-
-  return {
-    state, ui, actions, team, projects, tasks, members, activity, me, memberOf, projectOf,
-    providerLabel: tengu.label, providerKind: tengu.kind, today: today(),
-  };
+  const worldOf = useCallback((id: string) => state.worlds.find((w) => w.id === id) ?? state.worlds[0], [state.worlds]);
+  return { state, ui, actions, worldOf };
 }

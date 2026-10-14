@@ -1,278 +1,184 @@
 /**
- * The task composer. The card being built IS the input: as you type and choose, the card takes
- * on the project's colour, an owner avatar, a date and a priority. Decisions are revealed one at a
- * time (Where → Who → When → Priority). Enter at any point creates the task with what's shown.
+ * New quest. Type what's on your mind; the quest assembles itself as objects (world, who,
+ * when, private/connected) you can click to change. Enter adds it immediately. On add, the quest
+ * flies into its world's creature.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { integrationLabel } from '../integrations';
 import { dueLabel } from '../lib/dates';
-import { dateForPreset, DUE_OPTIONS, presetForDate, type DuePreset } from '../lib/due';
-import { parseComposer } from '../lib/parse';
-import { isDone, projectStats } from '../lib/selectors';
+import { dateForPreset, presetForDate, type DuePreset } from '../lib/due';
+import { parseQuest } from '../lib/parse';
 import { useStore } from '../store/store';
-import type { Priority } from '../types';
-import { IconArrowRight, IconCalendar, IconCloud, IconLock, IconReturn, IconX } from './Icons';
-import { accentStyle, Avatar, Kbd, PriorityIcon, ProjectMark } from './ui';
+import { IconCalendar, IconClock, IconExternal, IconX } from './Icons';
+import { fly, Kbd, MochiMark, WorldCreature, worldStyle } from './ui';
 
-const STEPS = ['What', 'Where', 'Who', 'When', 'Priority'] as const;
-const PRIORITIES: Priority[] = ['low', 'medium', 'high', 'urgent'];
+type Picker = null | 'world' | 'who' | 'when';
+const WHEN: { key: DuePreset; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: 'tomorrow', label: 'Tomorrow' },
+  { key: 'weekend', label: 'Weekend' },
+  { key: 'nextweek', label: 'Next week' },
+  { key: 'someday', label: 'Someday' },
+];
+const PEOPLE = ['Bryan', 'Malika', 'Natalia', 'Client B legal'];
 
 export function Composer() {
-  const { ui, actions, projects, tasks, members, me, state } = useStore();
+  const { state, ui, actions, worldOf } = useStore();
   const open = ui.composer.open;
-  const preset = ui.composer.preset;
-
-  const defaultProject = useMemo(() => {
-    if (preset?.projectId) return preset.projectId;
-    if (ui.view.name === 'project') return ui.view.id;
-    // Where I have the most open work
-    const counts = projects.map((p) => ({ id: p.id, n: tasks.filter((t) => t.projectId === p.id && t.assigneeId === me.id && !isDone(t)).length }));
-    return counts.sort((a, b) => b.n - a.n)[0]?.id ?? projects[0]?.id;
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const [text, setText] = useState('');
-  const [step, setStep] = useState(0);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [assigneeId, setAssigneeId] = useState<string | null>(null);
-  const [due, setDue] = useState<{ preset: DuePreset; date: string | null } | null>(null);
-  const [priority, setPriority] = useState<Priority | null>(null);
-  const [share, setShare] = useState<boolean | null>(null);
-  const [launching, setLaunching] = useState(false);
-  const input = useRef<HTMLTextAreaElement>(null);
-  const stepPanel = useRef<HTMLDivElement>(null);
+  const [worldId, setWorldId] = useState<string | null>(null);
+  const [who, setWho] = useState<string | null | undefined>(undefined); // undefined = not chosen
+  const [due, setDue] = useState<{ p: DuePreset; d: string | null } | null>(null);
+  const [connect, setConnect] = useState(false);
+  const [picker, setPicker] = useState<Picker>(null);
+  const [landing, setLanding] = useState(false);
+  const [whoText, setWhoText] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  const objRef = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+
+  const preset = ui.composer.worldId ?? (ui.view.name === 'world' ? ui.view.id : undefined);
 
   useEffect(() => {
     if (!open) return;
-    setText('');
-    setStep(0);
-    setProjectId(null);
-    setAssigneeId(preset?.assigneeId ?? null);
-    setDue(preset?.dueDate !== undefined ? { preset: presetForDate(preset.dueDate ?? null), date: preset.dueDate ?? null } : null);
-    setPriority(null);
-    setShare(null);
-    setLaunching(false);
+    setText(''); setWorldId(null); setWho(undefined); setDue(null); setConnect(false); setPicker(null); setLanding(false); setWhoText('');
     window.setTimeout(() => input.current?.focus(), 40);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);
 
-  const parsed = useMemo(() => parseComposer(text, projects, members), [text, projects, members]);
-
-  // Effective values: what you chose, else what the words say, else defaults.
-  const pId = projectId ?? parsed.projectId ?? defaultProject;
-  const project = projects.find((p) => p.id === pId) ?? projects[0];
-  const owners = members.filter((m) => project.memberIds.includes(m.id));
-  const aId = assigneeId ?? (parsed.assigneeId && owners.some((m) => m.id === parsed.assigneeId) ? parsed.assigneeId : me.id);
-  const owner = members.find((m) => m.id === aId) ?? me;
-  const dueDate = due ? dateForPreset(due.preset, due.date) : parsed.dueWord !== undefined ? parsed.dueDate ?? null : dateForPreset('today', null);
-  const prio = priority ?? parsed.priority ?? 'medium';
-  const canShare = project.source === 'tengu' && state.tengu.connected;
-  const willShare = canShare && (share ?? false);
+  const parsed = useMemo(() => parseQuest(text, state.worlds), [text, state.worlds]);
+  const wid = worldId ?? parsed.worldId ?? preset ?? 'personal';
+  const world = state.worlds.find((w) => w.id === wid) ?? state.worlds[0];
+  const waitingOn = who !== undefined ? who : parsed.waitingOn ?? null;
+  const dueDate = due ? dateForPreset(due.p, due.d) : parsed.dueWord !== undefined ? parsed.dueDate ?? null : dateForPreset('today', null);
   const title = parsed.title || text.trim();
   const ready = title.length > 0;
+  const canConnect = !!world.link && !!state.integrations[world.link.integrationId]?.connected;
+  const willConnect = canConnect && connect;
 
-  const chosen = { project: projectId !== null || !!parsed.projectId, owner: assigneeId !== null || !!parsed.assigneeId, due: due !== null || parsed.dueWord !== undefined, prio: priority !== null || !!parsed.priority };
+  useEffect(() => { if (!canConnect) setConnect(false); }, [canConnect]);
 
-  const advance = (to?: number) => {
-    const next = to ?? Math.min(step + 1, STEPS.length);
-    setStep(next);
-    if (next >= 1) window.setTimeout(() => stepPanel.current?.focus(), 30);
-  };
-
-  const create = () => {
-    if (!ready || launching) return;
-    setLaunching(true);
-    const task = actions.createTask({ title, projectId: project.id, assigneeId: owner.id, dueDate, time: parsed.time ?? null, priority: prio, share: willShare });
-    window.setTimeout(() => {
-      actions.closeComposer();
-      actions.toast({
-        tone: 'success',
-        title: 'Task created',
-        detail: `${project.name} · ${dueDate ? dueLabel(dueDate) : 'No date'} · ${owner.id === me.id ? 'You' : owner.name}`,
-        xp: 5,
-        action: { label: 'Edit', run: () => actions.openTask(task.id) },
-      });
-    }, 420);
-  };
-
-  // Digits pick an option on the current step (when the title field isn't focused).
-  const onStepKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      create();
-      return;
-    }
-    const n = Number(e.key);
-    if (!n) return;
-    if (step === 1 && projects[n - 1]) { setProjectId(projects[n - 1].id); advance(2); }
-    if (step === 2 && owners[n - 1]) { setAssigneeId(owners[n - 1].id); advance(3); }
-    if (step === 3 && DUE_OPTIONS[n - 1]) { setDue({ preset: DUE_OPTIONS[n - 1].key, date: null }); advance(4); }
-    if (step === 4 && PRIORITIES[n - 1]) setPriority(PRIORITIES[n - 1]);
-  };
+  // Hop when the world changes while typing.
+  const lastWorld = useRef(wid);
+  useEffect(() => {
+    if (open && ready && lastWorld.current !== wid) actions.say(wid, 'Here.', 'happy');
+    lastWorld.current = wid;
+  }, [wid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
 
-  const stepDone = (i: number) => step > i;
-  const SummaryRow = ({ i, children }: { i: number; children: React.ReactNode }) => (
-    <button type="button" className="cstep-summary" onClick={() => advance(i)}>
-      <span className="cstep-label">{STEPS[i]}</span>
-      <span className="cstep-value">{children}</span>
-      <span className="cstep-edit">Change</span>
+  const add = () => {
+    if (!ready || landing) return;
+    setLanding(true);
+    const q = actions.createQuest({ title, worldId: world.id, dueDate, priority: parsed.high ? 'high' : 'normal', waitingOn, connect: willConnect });
+    const target = strip.current?.querySelector(`[data-world="${world.id}"]`) ?? null;
+    fly(objRef.current, target, title, `var(--${world.color})`, () => {
+      actions.say(world.id, 'Got it.', 'happy');
+      actions.pulseWorld(world.id, '+1');
+      window.setTimeout(() => {
+        actions.closeComposer();
+        actions.toast({ title: `Added to ${world.name} ✦`, detail: `${title} · ${dueDate ? dueLabel(dueDate) : 'Someday'} · ${willConnect ? `connecting to ${integrationLabel(world.link!.integrationId)}` : 'private'}`, worldId: world.id, action: { label: 'Edit', run: () => actions.openQuest(q.id) } });
+      }, 260);
+    });
+  };
+
+  const token = (k: Picker, children: React.ReactNode, extra = '') => (
+    <button type="button" className={`token${picker === k ? ' on' : ''} ${extra}`} onClick={() => setPicker((p) => (p === k ? null : k))} aria-expanded={picker === k}>
+      {children}
     </button>
   );
 
   return (
-    <div className="composer-layer" role="dialog" aria-modal="true" aria-label="New task" onKeyDown={(e) => e.key === 'Escape' && actions.closeComposer()}>
+    <div className="composer-layer" role="dialog" aria-modal="true" aria-label="New quest" onKeyDown={(e) => e.key === 'Escape' && (picker ? setPicker(null) : actions.closeComposer())}>
       <div className="composer-backdrop" onClick={actions.closeComposer} />
-      <div className="composer">
+      <div className="composer" style={worldStyle(world)}>
         <div className="composer-top">
-          <span className="eyebrow">New task</span>
-          <ol className="composer-steps" aria-label="Steps">
-            {STEPS.map((s, i) => (
-              <li key={s} className={i === step ? 'on' : i < step || (i === 0 && ready) ? 'done' : ''}>{s}</li>
-            ))}
-          </ol>
+          <span className="eyebrow">New quest</span>
           <button type="button" className="icon-btn" onClick={actions.closeComposer} aria-label="Close"><IconX /></button>
         </div>
 
-        {/* The object being built */}
-        <div className={`tcard${chosen.project || ready ? ' has-project' : ''}${launching ? ' launching' : ''}`} style={accentStyle(project.color)}>
-          <div className="tcard-head">
-            <span className="tcard-key"><ProjectMark p={project} size={9} />{project.key}-new</span>
-            <span className="tcard-src">{willShare ? (<><IconCloud size={12} /> Shared via Tengu</>) : (<><IconLock size={12} /> Private</>)}</span>
-          </div>
-          <label htmlFor="composer-title" className="sr-only">What are we doing?</label>
-          <textarea
-            id="composer-title"
-            ref={input}
-            className="tcard-title"
-            rows={1}
-            placeholder="What are we doing?"
-            value={text}
-            onChange={(e) => setText(e.target.value.replace(/\n/g, ''))}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                create();
-              }
-              if (e.key === 'Tab' && ready && !e.shiftKey) {
-                e.preventDefault();
-                advance(step === 0 ? 1 : step + 1);
-              }
-            }}
-          />
-          {title && title !== text.trim() && <p className="tcard-clean">Saves as “{title}”</p>}
-          <div className="tcard-meta">
-            <span className={`tslot${ready ? ' on' : ''}`}><ProjectMark p={project} size={8} />{project.name}</span>
-            <span className={`tslot${ready ? ' on' : ''}`} key={`o-${owner.id}`}><Avatar m={owner} size={18} />{owner.id === me.id ? 'You' : owner.name}</span>
-            <span className={`tslot${ready ? ' on' : ''}`} key={`d-${dueDate}`}><IconCalendar size={13} />{dueDate ? dueLabel(dueDate) : 'No date'}{parsed.time ? ` · ${parsed.time}` : ''}</span>
-            <span className={`tslot${ready ? ' on' : ''}`} key={`p-${prio}`}><PriorityIcon p={prio} />{prio[0].toUpperCase() + prio.slice(1)}</span>
+        <label htmlFor="quest-input" className="composer-q">What’s on your mind?</label>
+        <input
+          id="quest-input"
+          ref={input}
+          className="composer-input"
+          value={text}
+          placeholder="Review the Dosify landing page"
+          autoComplete="off"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+        />
+
+        <div ref={objRef} className={`qobject${ready ? ' assembling' : ''}${landing ? ' landing' : ''}`} aria-live="polite">
+          <div className="qobject-creature"><WorldCreature world={world} size={54} /></div>
+          <div className="qobject-body">
+            <span className="qobject-title">{title || 'Your quest takes shape here'}</span>
+            {ready && (
+              <div className="tokens">
+                {token('world', <><span className="token-head"><WorldCreature world={world} size={18} mini /></span>{world.name}</>, 'token-world')}
+                {token('who', waitingOn ? <><IconClock size={12} /> Waiting on {waitingOn}</> : <><span className="me-dot">{state.name[0]}</span> For me</>)}
+                {token('when', <><IconCalendar size={12} /> {dueDate ? dueLabel(dueDate) : 'Someday'}</>)}
+                <button
+                  type="button"
+                  className={`token token-src${willConnect ? ' connected' : ''}`}
+                  disabled={!world.link}
+                  onClick={() => canConnect && setConnect((c) => !c)}
+                  title={!world.link ? `${world.name} lives only in Mochi` : !canConnect ? `${integrationLabel(world.link.integrationId)} isn’t connected` : willConnect ? `Will also be created in ${integrationLabel(world.link.integrationId)}` : 'Only you will see this'}
+                  aria-pressed={willConnect}
+                >
+                  {willConnect ? <><IconExternal size={12} /> Connected · {integrationLabel(world.link!.integrationId)}</> : <><MochiMark size={12} /> Private</>}
+                  {world.link && <span className="token-swap" aria-hidden="true">↕</span>}
+                </button>
+                {parsed.high && <span className="token token-static">High priority</span>}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* What Mochi understood, and how to move fast */}
-        <div className={`composer-hint${ready ? ' on' : ''}`} aria-live="polite">
-          {ready ? (
-            <>
-              {(parsed.projectId || parsed.dueWord || parsed.assigneeId || parsed.priority || parsed.time) && (
-                <span className="understood">Picked up from your words: {[parsed.projectId && project.name, parsed.dueWord, parsed.time, parsed.assigneeId && `@${owner.name}`, parsed.priority].filter(Boolean).join(' · ')}</span>
-              )}
-              <span className="keys"><Kbd>↵</Kbd> create now <Kbd>Tab</Kbd> {step === 0 ? 'set details' : 'next'}</span>
-            </>
-          ) : (
-            <span className="keys muted">Try “Review Dosify hero tomorrow @malika !”</span>
-          )}
-        </div>
+        {picker === 'world' && (
+          <div className="picker" role="listbox" aria-label="World">
+            {state.worlds.map((w) => (
+              <button key={w.id} type="button" role="option" aria-selected={w.id === world.id} className={`pick-world${w.id === world.id ? ' on' : ''}`} style={worldStyle(w)} onClick={() => { setWorldId(w.id); setPicker(null); actions.say(w.id, 'Here.', 'happy'); }}>
+                <WorldCreature world={w} size={34} />
+                <b>{w.name}</b>
+                <small>{w.link ? integrationLabel(w.link.integrationId) : 'Mochi only'}</small>
+              </button>
+            ))}
+          </div>
+        )}
+        {picker === 'who' && (
+          <div className="picker picker-row">
+            <button type="button" className={`chip${!waitingOn ? ' on' : ''}`} onClick={() => { setWho(null); setPicker(null); }}>For me</button>
+            {PEOPLE.map((p) => <button key={p} type="button" className={`chip${waitingOn === p ? ' on' : ''}`} onClick={() => { setWho(p); setPicker(null); }}>Waiting on {p}</button>)}
+            <form className="who-form" onSubmit={(e) => { e.preventDefault(); if (whoText.trim()) { setWho(whoText.trim()); setPicker(null); } }}>
+              <label className="sr-only" htmlFor="who-input">Someone else</label>
+              <input id="who-input" value={whoText} onChange={(e) => setWhoText(e.target.value)} placeholder="Someone else…" />
+            </form>
+          </div>
+        )}
+        {picker === 'when' && (
+          <div className="picker picker-row">
+            {WHEN.map((o) => <button key={o.key} type="button" className={`chip${presetForDate(dueDate) === o.key || (o.key === 'someday' && !dueDate) ? ' on' : ''}`} onClick={() => { setDue({ p: o.key, d: null }); setPicker(null); }}>{o.label}</button>)}
+            <label className="chip chip-date"><IconCalendar size={12} /><span className="sr-only">Pick a date</span><input type="date" onChange={(e) => { if (e.target.value) { setDue({ p: 'custom', d: e.target.value }); setPicker(null); } }} /></label>
+          </div>
+        )}
 
-        {/* Progressive decisions */}
-        <div className="csteps" ref={stepPanel} tabIndex={-1} onKeyDown={onStepKey}>
-          {stepDone(1) && <SummaryRow i={1}><ProjectMark p={project} size={9} /> {project.name}</SummaryRow>}
-          {stepDone(2) && <SummaryRow i={2}><Avatar m={owner} size={18} /> {owner.name}</SummaryRow>}
-          {stepDone(3) && <SummaryRow i={3}>{dueDate ? dueLabel(dueDate) : 'No date'}</SummaryRow>}
-
-          {step === 1 && (
-            <section className="cstep" aria-label="Where does this belong?">
-              <h3>Where does this belong?</h3>
-              <div className="ptiles">
-                {projects.map((p, i) => {
-                  const st = projectStats(p.id, tasks);
-                  return (
-                    <button key={p.id} type="button" className={`ptile${p.id === project.id ? ' on' : ''}`} style={accentStyle(p.color)} onClick={() => { setProjectId(p.id); advance(2); }}>
-                      <span className="ptile-top"><ProjectMark p={p} size={10} /><Kbd>{i + 1}</Kbd></span>
-                      <b>{p.name}</b>
-                      <small>{st.total - st.done} open · {Math.round(st.pct * 100)}%</small>
-                      <span className="ptile-bar"><i style={{ width: `${st.pct * 100}%` }} /></span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {step === 2 && (
-            <section className="cstep" aria-label="Who owns it?">
-              <h3>Who owns it?</h3>
-              <div className="people">
-                {owners.map((m, i) => (
-                  <button key={m.id} type="button" className={`person${m.id === owner.id ? ' on' : ''}`} onClick={() => { setAssigneeId(m.id); advance(3); }}>
-                    <Avatar m={m} size={36} />
-                    <b>{m.id === me.id ? `${m.name} (you)` : m.name}</b>
-                    <small>{m.role}</small>
-                    <Kbd>{i + 1}</Kbd>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {step === 3 && (
-            <section className="cstep" aria-label="When?">
-              <h3>When?</h3>
-              <div className="chips">
-                {DUE_OPTIONS.map((o, i) => (
-                  <button key={o.key} type="button" className={`chip${presetForDate(dueDate) === o.key ? ' on' : ''}`} onClick={() => { setDue({ preset: o.key, date: null }); advance(4); }}>
-                    {o.label} <Kbd>{i + 1}</Kbd>
-                  </button>
-                ))}
-                <label className="chip chip-date">
-                  <IconCalendar size={13} />
-                  <span className="sr-only">Pick a date</span>
-                  <input type="date" value={presetForDate(dueDate) === 'custom' && dueDate ? dueDate : ''} onChange={(e) => { if (e.target.value) { setDue({ preset: 'custom', date: e.target.value }); advance(4); } }} />
-                </label>
-              </div>
-            </section>
-          )}
-
-          {step >= 4 && (
-            <section className="cstep" aria-label="Priority">
-              <h3>How important?</h3>
-              <div className="seg" role="radiogroup">
-                {PRIORITIES.map((p, i) => (
-                  <button key={p} type="button" role="radio" aria-checked={prio === p} className={prio === p ? 'on' : ''} onClick={() => setPriority(p)}>
-                    <PriorityIcon p={p} /> {p[0].toUpperCase() + p.slice(1)} <Kbd>{i + 1}</Kbd>
-                  </button>
-                ))}
-              </div>
-              <label className={`share${canShare ? '' : ' disabled'}`}>
-                <input type="checkbox" checked={willShare} disabled={!canShare} onChange={(e) => setShare(e.target.checked)} />
-                <span className="switch" aria-hidden="true" />
-                <span>
-                  <b>Share with the team via Tengu</b>
-                  <small>{project.source !== 'tengu' ? `${project.name} is private to you.` : !state.tengu.connected ? 'Connect Tengu in Settings first.' : 'Off: only you can see this task.'}</small>
-                </span>
-              </label>
-            </section>
-          )}
+        <div className="dest" ref={strip}>
+          <span className="eyebrow">Lands in</span>
+          <div className="dest-row">
+            {state.worlds.map((w) => (
+              <button key={w.id} type="button" data-world={w.id} className={`dest-world${w.id === world.id ? ' on' : ''}`} style={worldStyle(w)} onClick={() => setWorldId(w.id)} aria-label={`Put it in ${w.name}`} title={w.name}>
+                <WorldCreature world={w} size={30} showSpeech={w.id === world.id} />
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="composer-foot">
-          {step === 0 ? (
-            <button type="button" className="btn btn-ghost" disabled={!ready} onClick={() => advance(1)}>Set details</button>
-          ) : step < 4 ? (
-            <button type="button" className="btn btn-ghost" onClick={() => advance()}>Skip</button>
-          ) : <span />}
-          <button type="button" className="btn btn-primary btn-lg" disabled={!ready} onClick={create}>
-            Create task <IconArrowRight />
-          </button>
+          <span className="hint">{ready ? <><Kbd>↵</Kbd> adds it now. Change anything later.</> : 'Try “Ask Bryan about FIJI tomorrow” or “Buy flowers Saturday”.'}</span>
+          <button type="button" className="btn btn-primary" disabled={!ready || landing} onClick={add}>Add to my world ✦</button>
         </div>
-        <p className="composer-fine"><IconReturn size={12} /> Enter creates it right away. You can change anything afterwards.</p>
+        {parsed.worldId && ready && <p className="fine center">World, date and “waiting on” come from simple word matching, not AI.</p>}
+        <span className="sr-only">{worldOf(wid).name}</span>
       </div>
     </div>
   );

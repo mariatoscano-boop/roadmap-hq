@@ -1,7 +1,14 @@
 # Mochi
 
-A visual, slightly game-like team workspace on top of Tengu. Tasks from Tengu and private tasks
-live side by side; the team's progress shows up as timelines, mosaics, pulse bars and a live feed.
+A personal productivity world. You work across many clients, projects and tools; Mochi brings
+*your* part of all of it into one visual place. Other people don't need to use it.
+
+- **Worlds**: FIJI, DOSIFY, CLIENT A, CLIENT B, PERSONAL, IDEAS, plus any you add. Each is a place
+  on your map with its own creature, terrain, notes and progress.
+- **Quests** are either **Private** (made in Mochi, only you see them, never pushed anywhere unless
+  you choose “Send to…”) or **External** (mirrored from the world's linked tool, e.g. Tengu).
+- **Creatures** hatch when you finish your first quest in a world, react to what you do there,
+  level up with the world, and unlock accessories.
 
 ## Run
 
@@ -15,104 +22,90 @@ npm run mochi:build    # typecheck + build + single-file pages:
                        #   mochi/dist/mochi.html             (page body, for a claude.ai Artifact)
 ```
 
-Everything is saved in this browser (localStorage). **Profile & settings → Reset workspace**
-brings back the sample data.
+Everything is saved in this browser. **Connections → Reset sample data** starts over.
 
 ## Things to try
 
-1. **Today** is a command center: your day as a timeline (carried over → scheduled with a "now"
-   line → anytime), **Up next**, **Project pulse**, **Your week** and live **Team activity**.
-   Switch the timeline between **Mine** and **Everyone**.
-2. Click a status circle to complete a task: check animation, `+20 XP` in the HUD, project
-   progress moves, the activity feed updates. The first completion levels Maria up to 4.
-3. Press **C** (or **Create**). Type `Review Dosify hero tomorrow @malika !`. The card takes on
-   Dosify's colour, Malika's avatar, a date and a priority as you type.
-   - **Enter** creates it right away (`+5 XP`, with **Edit** in the toast).
-   - **Tab** walks through Where → Who → When → Priority. Number keys pick an option.
-4. **Drag** any task row. A dock appears: drop on **Today / Tomorrow / Next week**, a person, a
-   project, **Review** or **Done**. Sidebar projects and people are drop targets too.
-   On a project's **Board**, drag cards between status columns.
-5. **Start focus** on Up next: a 25-minute timer for the top 3 picks. **Mark done** earns XP,
-   then offers the next one.
-6. **Projects**: each cover is a mosaic with one tile per task. Covers fill in as work gets
-   done. Reaching a milestone triggers a **Project level up**.
-7. **Team**: weekly pulse per person, then Active / Blocked / Upcoming. Click a person to filter.
-8. **Activity**: a 4-week completion heatmap and the full feed, filterable by type and person.
-   Teammates make a change about every 40 seconds while the page is open.
-9. The **team switcher** (top left) scopes everything to Prizm Studio, FIJI Team or Dosify Team.
-10. **Profile & settings** (your avatar): level, badges, Tengu **Sync now**, and a prototype-only
-    **switch person** to see the app as Bryan, Malika or Natalia.
+1. **Today** is your map: worlds around a Today hub, paths that flow when a world has something
+   due, a dot per open quest (lit = today, hollow = waiting on someone). Your **next move** and
+   **today's quests** sit beside it.
+2. Tick a quest: the world's creature reacts, `+20 ✦`, the world's progress moves. Every 60 ✦ in
+   a world it levels up and an object appears in its scene.
+3. Press **C** (or **Create**). Type `Review the Dosify landing page tomorrow`. The quest assembles:
+   the DOSIFY creature appears, then *For me*, *Tomorrow*, *Private*. Click any token to change it;
+   **Private ↕ Connected** toggles whether it's also created in the world's tool.
+   **Add to my world** (or Enter) flies it into the creature.
+4. Fast add: **C**, `Buy flowers Saturday`, **Enter** → “Added to PERSONAL ✦”.
+5. Enter **CLIENT A** and finish *Approve homepage mockups*: its egg hatches into Volt.
+6. In a world, add private quests inline (“waiting on Bryan” works), keep private notes, and
+   **Sync** its tool.
+7. **Quests**: a skyline of dots per world (click one to filter), then Today / Next / Waiting /
+   Someday. Filter Private vs From tools.
+8. **Collection**: every creature, its level, and accessories to equip as it levels up.
+9. **New world** (on the map or Worlds): name it, pick colour and terrain, and design its creature.
+10. **Connections** (plug icon): Tengu and the client tool, which worlds use them, Sync, Connect.
 
-Shortcuts: `C`/`N` create · `1`–`5` switch views · `Esc` closes · `Space` pauses focus.
+Shortcuts: `C`/`N`/`+` new quest · `1`–`4` switch views · `Esc` closes · `Space` pauses focus.
 
-## Team model
-
-- **Members**: Maria, Bryan, Malika, Natalia. Every action is performed as the current member
-  (`state.me`) and recorded in the activity log.
-- **Teams** scope projects and people. **Projects** list their members (who can own tasks).
-  A project with an `ownerId` (Personal) is visible only to that person.
-- **Tasks** have an owner (`assigneeId`), a creator (`createdBy`), a status
-  (to do / in progress / in review / blocked / done), due date, optional time, priority.
-- **Visibility**: Tengu tasks are shared with the team. Private tasks (`source: 'personal'`)
-  are visible only to their creator until shared with **Share to Tengu**.
-- **Progress**: XP per member (+20 per completion, +5 per new task, −20 if reopened),
-  levels every 400 XP, project levels = milestones reached, weekly % = done ÷ (due this week +
-  done this week).
-
-## Architecture
+## Model
 
 ```
-Tengu
-  ↓
-integrations/tengu/         TenguProvider interface + MockTenguProvider + mapping (status roles, owners)
-  ↓
-store/store.tsx             workspace state, actions, activity, XP, level-ups, drag, focus
-  ↓
-lib/selectors.ts            visibility, today, pulse, weekly chart, streaks, levels
-  ↓
-screens/ + components/      Today, My Work, Projects (+ board), Team, Activity; composer, panel, focus, dock
+World       id, name, color, terrain, creature {name, body, antenna}, kind, link?, notes
+            link = { integrationId, ref }   (null = Mochi only)
+Quest       id, title, worldId, source: 'private' | 'external', external? {integrationId, key},
+            done, waitingOn, dueDate, priority, notes
+Progress    totalXp, worldXp per world (+20 per quest), equipped accessories per world
 ```
+
+Private quests never leave Mochi. The only writes to a tool are: changes to quests that came from
+that tool (done, title, date, priority), and private quests you explicitly send there.
+
+## Integrations
+
+```
+External tools (Tengu, client tool, …)
+  ↓
+integrations/         IntegrationProvider interface · registry (index.ts) · merge.ts
+  ↓
+Worlds (link → integration + ref)
+  ↓
+Mochi
+```
+
+- `integrations/types.ts`: `IntegrationProvider` with `connect`, `disconnect`, `pull`, `create`, `update`.
+- `integrations/mockProvider.ts`: sample tools that live in this browser, with scripted changes so
+  **Sync** visibly does something. No network calls.
+- `integrations/index.ts`: the registry. Today: **Tengu** (FIJI, DOSIFY) and **Client tool** (CLIENT A).
+  Add a tool by implementing the interface and registering it here.
+
+### Connecting real tools
+
+No real accounts or APIs are used yet. For Tengu, the Product HQ app in this repo already reads it
+through the Tengu OS connector (see [`docs/TENGU_INTEGRATION.md`](../docs/TENGU_INTEGRATION.md));
+a live provider would map `pull` → `list_tasks` (filtered to me), `create` → `create_task`,
+`update` → `update_task`. Other tools need their own provider.
+
+## Code
 
 ```
 mochi/src/
-  types.ts                  Member, Team, Project (+ milestones), Task, Activity
-  data/seed.ts              Sample workspace (dates relative to today)
-  integrations/tengu/       provider.ts · mockProvider.ts · mapping.ts · types.ts · index.ts (swap provider here)
-  lib/                      selectors · focus (Up next ranking) · parse (composer words) · dates · due
-  store/store.tsx
-  components/               Shell (sidebar, HUD, dock, toasts, level-up) · Composer · TaskPanel · TaskRow
-                            FocusMode · Settings · Mosaic · ActivityLine · ui (avatars, status, rings, Mochi orb)
-  screens/                  Today · MyWork · Projects · Team · Activity
+  types.ts                  World, Quest, CreatureSpec, IntegrationState
+  data/seed.ts              Sample worlds and quests (dates relative to today)
+  integrations/             types · mockProvider · index (registry) · merge
+  lib/                      world (progress, levels, map layout) · focus (next move) · parse · dates · due
+  store/store.tsx           state, actions, reactions, sync
+  components/               Creature (+ Egg) · Environment (terrain, objects) · WorldMap · Composer
+                            QuestRow · QuestPanel · FocusMode · Connections · NewWorld · Shell · ui
+  screens/                  Today (map) · Worlds (+ WorldView) · Quests · Collection
 ```
-
-The UI never talks to Tengu. Writes to Tengu tasks (status, owner, title, due date, priority) go
-through the store to the provider; if Tengu can't be reached they're queued and sent on the
-next sync.
-
-### Connecting real Tengu
-
-The prototype uses `MockTenguProvider`. No real Tengu account or API is called. To connect it,
-implement `TenguProvider` and export it from `integrations/tengu/index.ts`.
-
-The Product HQ app in this repo already reads Tengu through the **Tengu OS** connector
-(see [`docs/TENGU_INTEGRATION.md`](../docs/TENGU_INTEGRATION.md)). The same tools map onto this
-interface:
-
-| TenguProvider | Tengu OS tool |
-|---|---|
-| `pull()` | `list_lists` (spaces, status roles) + `list_tasks` per list |
-| `createTask()` | `create_task` |
-| `updateTask()` | `update_task` (status by role → the list's own status name; one assignee) |
-
-Mochi only reads status **roles** (available, started, review, blocked, done), never list-specific
-status names, which matches how Tengu describes its lists. Owners are matched to members by name.
 
 ## Design notes
 
-- Light theme by choice. Warm white ground, one inset white canvas, charcoal type.
-  Accents only mark projects (FIJI pink, Dosify violet, Personal green), people, status and data.
-- Geist for the interface, Geist Mono for metadata, keys, times and numbers.
-- Motion: rows slide in, completion sweeps and draws the check, numbers count, bars and rings
-  fill, the composer card launches into the list. All of it is off under `prefers-reduced-motion`.
-- Mochi is now a small abstract orb. It shows up in focus mode, level-ups, empty states and
-  your profile, never as a permanent panel.
+- Off-white editorial pages around dark-plum game viewports (map, scenes, composer, focus).
+  Colour belongs to worlds; the rest is ink, paper and plum. Light theme by choice.
+- Geist for text, Geist Mono for labels and metadata, Silkscreen only for game numbers (levels,
+  counts, timer).
+- Creatures are original: a body shape, a screen for a face, an antenna. Moods change the face;
+  reactions make them hop. Motion stops under `prefers-reduced-motion`.
+- “Natural language” is deterministic word matching (world names, dates, “waiting on”, “!”),
+  and the composer says so.

@@ -1,6 +1,6 @@
 # Product HQ
 
-> Also in this repo: **[Mochi](mochi/README.md)**, a visual team workspace that syncs with Tengu (`npm run mochi`).
+> Also in this repo: **[Mochi](mochi/README.md)**, a personal productivity world across your clients and tools (`npm run mochi`).
 
 An interactive product roadmap you *walk into*. Initiatives are buildings in a small isometric city
 and priority is depth. 🔥 **NOW** sits in the foreground, ⚡ **NEXT** in the middle, and

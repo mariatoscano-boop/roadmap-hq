@@ -1,103 +1,76 @@
-/** Focus mode: one task, a 25-minute timer, and nothing else. */
+/** Focus: one quest, its creature, a 25-minute timer. */
 import { useEffect, useState } from 'react';
-import { pickFocus } from '../lib/focus';
+import { rankQuests } from '../lib/focus';
 import { useStore } from '../store/store';
-import { IconArrowRight, IconCheck, IconPause, IconPlay, IconX } from './Icons';
-import { accentStyle, MochiOrb, ProjectTag, Ring } from './ui';
+import { IconArrow, IconCheck, IconPause, IconPlay, IconX } from './Icons';
+import { Ring, SourceBadge, WorldCreature, worldStyle } from './ui';
 
-const LENGTH = 25 * 60;
+const LEN = 25 * 60;
 
 export function FocusMode() {
-  const { state, ui, actions, projectOf, tasks, me } = useStore();
+  const { state, ui, actions, worldOf } = useStore();
   const f = ui.focus;
-  const id = f ? f.ids[f.index] : null;
-  const task = state.tasks.find((t) => t.id === id) ?? null;
-  const [left, setLeft] = useState(LENGTH);
-  const [running, setRunning] = useState(true);
-  const [finished, setFinished] = useState(false);
+  const q = f ? state.quests.find((x) => x.id === f.ids[f.index]) ?? null : null;
+  const [left, setLeft] = useState(LEN);
+  const [run, setRun] = useState(true);
+  const [done, setDone] = useState(false);
 
+  useEffect(() => { setLeft(LEN); setRun(true); setDone(false); }, [q?.id]);
   useEffect(() => {
-    setLeft(LENGTH);
-    setRunning(true);
-    setFinished(false);
-  }, [id]);
-
-  useEffect(() => {
-    if (!task || !running || finished) return;
+    if (!q || !run || done) return;
     const t = window.setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => window.clearInterval(t);
-  }, [task, running, finished]);
-
+  }, [q, run, done]);
   useEffect(() => {
     if (!f) return;
-    const onKey = (e: KeyboardEvent) => {
+    const k = (e: KeyboardEvent) => {
       if (e.key === 'Escape') actions.exitFocus();
-      if (e.key === ' ' && !finished) {
-        e.preventDefault();
-        setRunning((r) => !r);
-      }
+      if (e.key === ' ' && !done) { e.preventDefault(); setRun((r) => !r); }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [f, finished, actions]);
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [f, done, actions]);
 
-  if (!f || !task) return null;
-  const p = projectOf(task.projectId);
-  const hasNext = f.index + 1 < f.ids.length;
-  const mm = String(Math.floor(left / 60)).padStart(2, '0');
-  const ss = String(left % 60).padStart(2, '0');
-  const reason = pickFocus([task], 1)[0]?.reason;
-
-  const complete = () => {
-    actions.setStatus(task.id, 'done', { quiet: true });
-    setFinished(true);
-  };
+  if (!f || !q) return null;
+  const w = worldOf(q.worldId);
+  const more = f.index + 1 < f.ids.length;
   const next = () => {
-    if (hasNext) actions.nextFocus();
-    else {
-      // Offer what's next from the ranking.
-      const more = pickFocus(tasks.filter((t) => t.assigneeId === me.id && t.id !== task.id), 1)[0];
-      if (more && finished) actions.startFocus([more.task.id]);
-      else actions.exitFocus();
-    }
+    if (more) return actions.nextFocus();
+    const n = rankQuests(state.quests.filter((x) => x.id !== q.id), 1)[0];
+    if (done && n) actions.startFocus([n.quest.id]);
+    else actions.exitFocus();
   };
 
   return (
-    <div className="focus" role="dialog" aria-modal="true" aria-label="Focus mode" style={accentStyle(p.color)}>
+    <div className="focus" role="dialog" aria-modal="true" aria-label="Focus" style={worldStyle(w)}>
       <div className="focus-top">
-        <span className="eyebrow">Focus{f.ids.length > 1 ? ` · ${f.index + 1} of ${f.ids.length}` : ''}</span>
-        <button type="button" className="icon-btn" onClick={actions.exitFocus} aria-label="Exit focus"><IconX /></button>
+        <span className="eyebrow">Focus · {w.name}{f.ids.length > 1 ? ` · ${f.index + 1}/${f.ids.length}` : ''}</span>
+        <button type="button" className="icon-btn" onClick={actions.exitFocus} aria-label="Leave focus"><IconX /></button>
       </div>
-
-      {!finished ? (
-        <div className="focus-body" key={task.id}>
-          <ProjectTag p={p} text={task.tengu?.key ?? p.name} />
-          <h1 className="focus-title">{task.title}</h1>
-          {reason && <p className="focus-reason">{reason}</p>}
-          <div className="focus-timer">
-            <Ring value={left / LENGTH} size={220} stroke={6} accent="var(--accent)" track="rgba(255,255,255,.1)">
-              <span className="focus-time">{mm}:{ss}</span>
-              <span className="focus-state">{running ? 'In focus' : 'Paused'}</span>
-            </Ring>
-            <span className="focus-orb"><MochiOrb size={30} mood="focus" /></span>
-          </div>
+      {!done ? (
+        <div className="focus-body" key={q.id}>
+          <WorldCreature world={w} size={88} mood={run ? 'focus' : 'sleepy'} showSpeech />
+          <h1>{q.title}</h1>
+          <SourceBadge q={q} long />
+          <Ring value={left / LEN} size={200} stroke={4} track="rgba(255,255,255,.08)">
+            <span className="focus-time">{String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')}</span>
+            <span className="eyebrow">{run ? 'In focus' : 'Paused'}</span>
+          </Ring>
           <div className="focus-actions">
-            <button type="button" className="btn btn-on-dark" onClick={() => setRunning((r) => !r)}>
-              {running ? <><IconPause size={14} /> Pause</> : <><IconPlay size={14} /> Resume</>}
-            </button>
-            <button type="button" className="btn btn-accent btn-lg" onClick={complete}><IconCheck /> Mark done · +20 XP</button>
-            <button type="button" className="btn btn-on-dark" onClick={next}>{hasNext ? 'Skip' : 'Not now'} <IconArrowRight size={14} /></button>
+            <button type="button" className="btn btn-dark" onClick={() => setRun((r) => !r)}>{run ? <><IconPause size={13} /> Pause</> : <><IconPlay size={13} /> Resume</>}</button>
+            <button type="button" className="btn btn-accent" onClick={() => { actions.toggleDone(q.id, { quiet: true }); setDone(true); }}><IconCheck /> Done · +20 ✦</button>
+            <button type="button" className="btn btn-dark" onClick={next}>{more ? 'Skip' : 'Not now'} <IconArrow size={13} /></button>
           </div>
-          <p className="focus-keys">Space to pause · Esc to leave</p>
+          <p className="focus-keys">Space pauses · Esc leaves</p>
         </div>
       ) : (
-        <div className="focus-body focus-done">
-          <MochiOrb size={64} mood="happy" />
-          <h1 className="focus-title">Nice. That’s done.</h1>
-          <p className="focus-reason">{task.title} · +20 XP · {Math.max(1, Math.round((LENGTH - left) / 60))} min focused</p>
+        <div className="focus-body">
+          <WorldCreature world={w} size={96} mood="happy" showSpeech />
+          <h1>Nice. That’s done.</h1>
+          <p className="focus-sub">{w.name} moved forward. {Math.max(1, Math.round((LEN - left) / 60))} min in focus.</p>
           <div className="focus-actions">
-            <button type="button" className="btn btn-on-dark" onClick={actions.exitFocus}>Back to work</button>
-            <button type="button" className="btn btn-accent btn-lg" onClick={next}>Ready for the next one? <IconArrowRight /></button>
+            <button type="button" className="btn btn-dark" onClick={actions.exitFocus}>Back to my world</button>
+            <button type="button" className="btn btn-accent" onClick={next}>What’s next? <IconArrow size={13} /></button>
           </div>
         </div>
       )}
