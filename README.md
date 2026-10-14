@@ -1,5 +1,7 @@
 # Product HQ
 
+> Also in this repo: **[Mochi](mochi/README.md)**, a personal to-do companion that syncs with Tengu (`npm run mochi`).
+
 An interactive product roadmap you *walk into*. Initiatives are buildings in a small isometric city
 and priority is depth. 🔥 **NOW** sits in the foreground, ⚡ **NEXT** in the middle, and
 🌙 **LATER** on the horizon. Every linked Tengu ticket is a floor of its building:
