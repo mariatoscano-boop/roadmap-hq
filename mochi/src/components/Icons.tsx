@@ -1,76 +1,52 @@
-/** Small line icons, 24×24, drawn to match Mochi's outline weight. */
+/** Line icons on a 16×16 grid, 1.5px strokes to sit with Geist. */
 import type { SVGProps } from 'react';
 
 type P = SVGProps<SVGSVGElement> & { size?: number };
-const base = (size = 22): SVGProps<SVGSVGElement> => ({
-  width: size,
-  height: size,
-  viewBox: '0 0 24 24',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.8,
-  strokeLinecap: 'round',
-  strokeLinejoin: 'round',
-  'aria-hidden': true,
+const svg = (size = 16): SVGProps<SVGSVGElement> => ({
+  width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
+  strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
 });
+const I = (d: string | string[]) => ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}>{(Array.isArray(d) ? d : [d]).map((x, i) => <path key={i} d={x} />)}</svg>
+);
 
-export const IconHeart = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.3a4.3 4.3 0 0 1 7.5 2.5C19.5 15.4 12 20 12 20Z" /></svg>
+export const IconToday = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><circle cx="8" cy="8" r="2.75" /><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" /></svg>
 );
-export const IconBow = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}>
-    <path d="M12 11.5C9.5 6.5 3.5 6.8 3.8 11.5 3.5 16.2 9.5 16.5 12 11.5ZM12 11.5c2.5-5 8.5-4.7 8.2 0 .3 4.7-5.7 5-8.2 0Z" />
-    <path d="M11 13l-2.5 6M13 13l2.5 6" />
-  </svg>
+export const IconWork = I(['M2 9.5h3.2l1 1.75h3.6l1-1.75H14', 'M2 9.5 3.6 3.6A1.5 1.5 0 0 1 5 2.5h6a1.5 1.5 0 0 1 1.4 1.1L14 9.5v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z']);
+export const IconProjects = I(['M2.5 2.5h4.5v4.5H2.5z', 'M9 2.5h4.5v4.5H9z', 'M2.5 9h4.5v4.5H2.5z', 'M9 9h4.5v4.5H9z']);
+export const IconTeam = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><circle cx="6" cy="5.5" r="2.25" /><path d="M2 13.5c.4-2.3 2-3.5 4-3.5s3.6 1.2 4 3.5" /><path d="M10.5 3.4a2.2 2.2 0 0 1 0 4.2M12 10.3c1 .5 1.7 1.6 2 3.2" /></svg>
 );
-export const IconSparkle = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}>
-    <path d="M12 3.5c.7 4.3 1.9 5.6 6.5 6.5-4.6.9-5.8 2.2-6.5 6.5-.7-4.3-1.9-5.6-6.5-6.5 4.6-.9 5.8-2.2 6.5-6.5Z" />
-    <path d="M18.5 15.5c.3 1.6.8 2.1 2.3 2.4-1.5.3-2 .8-2.3 2.4-.3-1.6-.8-2.1-2.3-2.4 1.5-.3 2-.8 2.3-2.4Z" />
-  </svg>
+export const IconActivity = I('M1.5 8.5h2.7l1.8-5 3.5 9 1.9-4h3.1');
+export const IconPlus = I('M8 3v10M3 8h10');
+export const IconChevronDown = I('m4 6 4 4 4-4');
+export const IconChevronRight = I('m6 4 4 4-4 4');
+export const IconArrowRight = I(['M3 8h10', 'm9 4 4 4-4 4']);
+export const IconBack = I(['M13 8H3', 'm7 4-4 4 4 4']);
+export const IconX = I('M4 4l8 8M12 4l-8 8');
+export const IconCheck = I('m3.5 8.5 3 3 6-7');
+export const IconSync = I(['M13 6A5.2 5.2 0 0 0 3.6 4.4M3 10a5.2 5.2 0 0 0 9.4 1.6', 'M13 2.5V6H9.5M3 13.5V10h3.5']);
+export const IconSettings = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><circle cx="8" cy="8" r="2" /><path d="M8 1.75v1.5M8 12.75v1.5M14.25 8h-1.5M3.25 8h-1.5M12.4 3.6l-1.06 1.06M4.66 11.34 3.6 12.4M12.4 12.4l-1.06-1.06M4.66 4.66 3.6 3.6" /></svg>
 );
-export const IconTeddy = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}>
-    <circle cx="6.8" cy="6.8" r="2.3" /><circle cx="17.2" cy="6.8" r="2.3" />
-    <circle cx="12" cy="12.5" r="7" />
-    <ellipse cx="12" cy="14.8" rx="2.6" ry="2" />
-    <path d="M9.6 11h.01M14.4 11h.01" strokeWidth="2.4" />
-  </svg>
+export const IconPlay = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><path d="M5 3.5v9l7-4.5z" fill="currentColor" /></svg>
 );
-export const IconFlower = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}>
-    <circle cx="12" cy="10" r="2" />
-    <path d="M12 8c-1.5-3.5 1.5-5 1.5-5s3 1.5 1.5 5M14 10c3.5-1.5 5 1.5 5 1.5s-1.5 3-5 1.5M12 12c1.5 3.5-1.5 5-1.5 5s-3-1.5-1.5-5M10 10C6.5 11.5 5 8.5 5 8.5s1.5-3 5-1.5" transform="rotate(-8 12 10)" />
-    <path d="M12 12.5V21M12 18c-2-2.5-4.5-2.4-5.5-2 1 2 3 3 5.5 2Z" />
-  </svg>
+export const IconPause = I(['M5.5 3.5v9', 'M10.5 3.5v9']);
+export const IconCalendar = I(['M2.5 4h11v9.5h-11z', 'M2.5 7h11', 'M5.5 2.5v3M10.5 2.5v3']);
+export const IconLock = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><rect x="3.5" y="7" width="9" height="6.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg>
 );
-export const IconPlus = ({ size, ...p }: P) => (
-  <svg {...base(size)} strokeWidth={2.2} {...p}><path d="M12 5v14M5 12h14" /></svg>
+export const IconCloud = I('M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.7 1 2.5 2.5 0 0 1-.3 5z');
+export const IconTrash = I(['M2.5 4.5h11', 'M6 4.5V3h4v1.5', 'M4 4.5l.6 8.5a1 1 0 0 0 1 1h4.8a1 1 0 0 0 1-1l.6-8.5']);
+export const IconGrip = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p} fill="currentColor" stroke="none">{[4, 8, 12].flatMap((y) => [6, 10].map((x) => <circle key={`${x}${y}`} cx={x} cy={y} r="1" />))}</svg>
 );
-export const IconClose = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M6 6l12 12M18 6 6 18" /></svg>
+export const IconBoard = I(['M2.5 2.5h3v11h-3z', 'M6.5 2.5h3v7h-3z', 'M10.5 2.5h3v9h-3z']);
+export const IconList = I(['M5.5 4h8M5.5 8h8M5.5 12h8', 'M2.5 4h.01M2.5 8h.01M2.5 12h.01']);
+export const IconBolt = I('M9 1.5 3.5 9h4L7 14.5 12.5 7h-4z');
+export const IconTarget = ({ size, ...p }: P) => (
+  <svg {...svg(size)} {...p}><circle cx="8" cy="8" r="6" /><circle cx="8" cy="8" r="3" /><circle cx="8" cy="8" r=".5" fill="currentColor" /></svg>
 );
-export const IconChevron = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="m9 6 6 6-6 6" /></svg>
-);
-export const IconBack = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="m15 6-6 6 6 6" /></svg>
-);
-export const IconCheck = ({ size, ...p }: P) => (
-  <svg {...base(size)} strokeWidth={2.6} {...p}><path className="check-path" d="M5.5 12.5l4 4 9-9.5" /></svg>
-);
-export const IconSync = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M19 8a7.5 7.5 0 0 0-13.3-1.4M5 16a7.5 7.5 0 0 0 13.3 1.4" /><path d="M19 3.5V8h-4.5M5 20.5V16h4.5" /></svg>
-);
-export const IconTrash = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5L17.5 7" /></svg>
-);
-export const IconCloud = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M7.5 18.5a4 4 0 0 1-.6-8 5.5 5.5 0 0 1 10.6 1.3 3.4 3.4 0 0 1-.5 6.7Z" /></svg>
-);
-export const IconPlate = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><circle cx="12" cy="12.5" r="8" /><circle cx="12" cy="12.5" r="4.6" /><path d="M12 2.5v1.6" /></svg>
-);
-export const IconFlag = ({ size, ...p }: P) => (
-  <svg {...base(size)} {...p}><path d="M6 21V4.5M6 5h10.5l-2 3.5 2 3.5H6" /></svg>
-);
+export const IconReturn = I(['M13 3.5V8a1.5 1.5 0 0 1-1.5 1.5H3', 'm6 6.5-3 3 3 3']);

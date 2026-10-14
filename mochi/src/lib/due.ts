@@ -1,30 +1,35 @@
-import { addDays, nextWeekday, today } from './dates';
+import { addDays, nextWeekday, parseISO, today } from './dates';
 
-export type DuePreset = 'today' | 'tomorrow' | 'weekend' | 'nextweek' | 'someday' | 'custom';
+export type DuePreset = 'today' | 'tomorrow' | 'week' | 'nextweek' | 'none' | 'custom';
 
 export const DUE_OPTIONS: { key: DuePreset; label: string }[] = [
   { key: 'today', label: 'Today' },
   { key: 'tomorrow', label: 'Tomorrow' },
-  { key: 'weekend', label: 'This weekend' },
+  { key: 'week', label: 'This week' },
   { key: 'nextweek', label: 'Next week' },
-  { key: 'someday', label: 'Someday' },
-  { key: 'custom', label: 'Pick a date...' },
+  { key: 'none', label: 'No date' },
 ];
+
+/** "This week" = this Friday (or next Friday from the weekend). */
+function endOfWeek(t: string) {
+  const d = parseISO(t).getDay();
+  return d >= 1 && d <= 4 ? nextWeekday(5, t) : d === 5 ? t : nextWeekday(5, t);
+}
 
 export function dateForPreset(p: DuePreset, custom: string | null): string | null {
   const t = today();
   switch (p) {
     case 'today': return t;
     case 'tomorrow': return addDays(t, 1);
-    case 'weekend': return nextWeekday(6, addDays(t, -1));
+    case 'week': return endOfWeek(t);
     case 'nextweek': return nextWeekday(1);
-    case 'someday': return null;
+    case 'none': return null;
     case 'custom': return custom ?? t;
   }
 }
 
 export function presetForDate(d: string | null): DuePreset {
-  if (d === null) return 'someday';
-  for (const p of ['today', 'tomorrow', 'weekend', 'nextweek'] as DuePreset[]) if (dateForPreset(p, null) === d) return p;
+  if (d === null) return 'none';
+  for (const p of ['today', 'tomorrow', 'week', 'nextweek'] as DuePreset[]) if (dateForPreset(p, null) === d) return p;
   return 'custom';
 }

@@ -10,7 +10,7 @@ const read = (ext) => readFileSync(`${dir}/assets/${assets.find((f) => f.endsWit
 const css = read('.css');
 const js = read('.js').replace(/<\/script/gi, '<\\/script');
 
-const fonts = 'https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600&family=Instrument+Serif:ital@1&family=M+PLUS+Rounded+1c:wght@400;500;700&display=swap';
+const fonts = 'https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap';
 const html = `<title>Mochi</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

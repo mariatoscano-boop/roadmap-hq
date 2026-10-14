@@ -1,5 +1,5 @@
 /**
- * Tengu-shaped data: what a Tengu provider speaks. The app never uses these directly in the UI;
+ * Tengu-shaped data: what a Tengu provider speaks. The UI never uses these directly;
  * mapping.ts turns them into app Tasks.
  */
 export interface TenguSpace {
@@ -7,8 +7,14 @@ export interface TenguSpace {
   name: string;
 }
 
-/** Tengu priority: 1 = urgent ... 4 = low (null = none). */
+/** Tengu priority: 1 = urgent … 4 = low (null = none). */
 export type TenguPriority = 1 | 2 | 3 | 4 | null;
+
+/**
+ * Tengu status names differ per list, but every status carries a role. Mochi only reads roles
+ * (a subset of Tengu's: planning/available → todo, started, review, blocked, done).
+ */
+export type TenguStatusRole = 'available' | 'started' | 'review' | 'blocked' | 'done';
 
 export interface TenguTask {
   id: string;
@@ -16,9 +22,11 @@ export interface TenguTask {
   key: string;
   title: string;
   spaceId: string;
-  /** The list's own status name ("In progress", "QA passed"...). */
+  /** The list's own status name ("In progress", "QA passed"…). */
   status: string;
-  done: boolean;
+  statusRole: TenguStatusRole;
+  /** Assignee as Tengu knows them (matched to workspace members by name). */
+  assignee: string | null;
   dueDate: string | null;
   priority: TenguPriority;
   updatedAt: string;
@@ -27,15 +35,18 @@ export interface TenguTask {
 export interface TenguTaskDraft {
   spaceId: string;
   title: string;
+  assignee: string | null;
   dueDate: string | null;
   priority: TenguPriority;
+  statusRole: TenguStatusRole;
 }
 
 export interface TenguTaskPatch {
   title?: string;
   dueDate?: string | null;
   priority?: TenguPriority;
-  done?: boolean;
+  statusRole?: TenguStatusRole;
+  assignee?: string | null;
 }
 
 export interface PullResult {

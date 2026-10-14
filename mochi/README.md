@@ -1,7 +1,7 @@
-# Mochi ♡
+# Mochi
 
-A personal productivity layer on top of Tengu: your Tengu tasks and your own private to-dos in one
-cute, calm place, with Mochi (a tiny companion) who reacts to what you do.
+A visual, slightly game-like team workspace on top of Tengu. Tasks from Tengu and private tasks
+live side by side; the team's progress shows up as timelines, mosaics, pulse bars and a live feed.
 
 ## Run
 
@@ -15,96 +15,104 @@ npm run mochi:build    # typecheck + build + single-file pages:
                        #   mochi/dist/mochi.html             (page body, for a claude.ai Artifact)
 ```
 
-Everything is saved in this browser (localStorage). **Little Things → Start over** brings back the
-sample data.
+Everything is saved in this browser (localStorage). **Profile & settings → Reset workspace**
+brings back the sample data.
 
 ## Things to try
 
-1. **Today**: tick a task. Watch the check, the sparkle, `+10 ✦`, and Mochi's reaction.
-   The first tick unlocks flowers for Mochi's room.
-2. Press **+** (or `n`) and type `Review Dosify hero tomorrow !`. Project, due date and priority
-   are picked from your words and shown so you can change them.
-3. **Projects → Dosify**: the progress bar and garden update as you go.
-4. **What's on my plate?** (Today or Little Things) → **Pick my focus**. Up to three tasks, each
-   with the reason it was picked. **Let's do this** pins them to the top of Today.
-5. Finish every task in **Personal** to unlock the disco ball (plus confetti).
-6. **Rewards**: change the wallpaper, and tap treasures to place them in the room or put them away.
-7. **Little Things → Sync now**: the sample Tengu sends 2 new tasks. The next sync shows a teammate
-   finishing one.
-8. Click Mochi. Hover the small Mochi in the sidebar.
+1. **Today** is a command center: your day as a timeline (carried over → scheduled with a "now"
+   line → anytime), **Up next**, **Project pulse**, **Your week** and live **Team activity**.
+   Switch the timeline between **Mine** and **Everyone**.
+2. Click a status circle to complete a task: check animation, `+20 XP` in the HUD, project
+   progress moves, the activity feed updates. The first completion levels Maria up to 4.
+3. Press **C** (or **Create**). Type `Review Dosify hero tomorrow @malika !`. The card takes on
+   Dosify's colour, Malika's avatar, a date and a priority as you type.
+   - **Enter** creates it right away (`+5 XP`, with **Edit** in the toast).
+   - **Tab** walks through Where → Who → When → Priority. Number keys pick an option.
+4. **Drag** any task row. A dock appears: drop on **Today / Tomorrow / Next week**, a person, a
+   project, **Review** or **Done**. Sidebar projects and people are drop targets too.
+   On a project's **Board**, drag cards between status columns.
+5. **Start focus** on Up next: a 25-minute timer for the top 3 picks. **Mark done** earns XP,
+   then offers the next one.
+6. **Projects**: each cover is a mosaic with one tile per task. Covers fill in as work gets
+   done. Reaching a milestone triggers a **Project level up**.
+7. **Team**: weekly pulse per person, then Active / Blocked / Upcoming. Click a person to filter.
+8. **Activity**: a 4-week completion heatmap and the full feed, filterable by type and person.
+   Teammates make a change about every 40 seconds while the page is open.
+9. The **team switcher** (top left) scopes everything to Prizm Studio, FIJI Team or Dosify Team.
+10. **Profile & settings** (your avatar): level, badges, Tengu **Sync now**, and a prototype-only
+    **switch person** to see the app as Bryan, Malika or Natalia.
 
-## Tasks: Tengu vs. mine
+Shortcuts: `C`/`N` create · `1`–`5` switch views · `Esc` closes · `Space` pauses focus.
 
-| | Tengu task | My task |
-|---|---|---|
-| Comes from | Tengu (sync) | You, in Mochi |
-| Tag | `☁ TENGU` | `♡ MY TASK` |
-| Changes (done, title, due, priority) | Sent to Tengu | Stay in Mochi |
-| Delete | "Remove from Mochi" (stays in Tengu, and later syncs don't bring it back) | Deleted, with Undo |
-| Project | Fixed to its Tengu space | Any project |
+## Team model
 
-A personal task in a Tengu project can be sent to Tengu from its details ("Add to Tengu") or
-when you create it. **Personal** is a Mochi-only project, so its tasks never leave the app.
+- **Members**: Maria, Bryan, Malika, Natalia. Every action is performed as the current member
+  (`state.me`) and recorded in the activity log.
+- **Teams** scope projects and people. **Projects** list their members (who can own tasks).
+  A project with an `ownerId` (Personal) is visible only to that person.
+- **Tasks** have an owner (`assigneeId`), a creator (`createdBy`), a status
+  (to do / in progress / in review / blocked / done), due date, optional time, priority.
+- **Visibility**: Tengu tasks are shared with the team. Private tasks (`source: 'personal'`)
+  are visible only to their creator until shared with **Share to Tengu**.
+- **Progress**: XP per member (+20 per completion, +5 per new task, −20 if reopened),
+  levels every 400 XP, project levels = milestones reached, weekly % = done ÷ (due this week +
+  done this week).
 
 ## Architecture
 
 ```
 Tengu
   ↓
-integrations/tengu/         TenguProvider interface + MockTenguProvider + mapping
+integrations/tengu/         TenguProvider interface + MockTenguProvider + mapping (status roles, owners)
   ↓
-store/store.tsx             projects, tasks, character, focus; all side effects live here
+store/store.tsx             workspace state, actions, activity, XP, level-ups, drag, focus
   ↓
-screens/ + components/      Today, Projects, My Tasks, Little Things, Rewards
+lib/selectors.ts            visibility, today, pulse, weekly chart, streaks, levels
+  ↓
+screens/ + components/      Today, My Work, Projects (+ board), Team, Activity; composer, panel, focus, dock
 ```
 
 ```
 mochi/src/
-  types.ts                  App data model (Project, Task, Character, Reward)
-  data/seed.ts              Starting data (FIJI, Dosify, Personal), dates relative to today
-  integrations/tengu/
-    provider.ts             TenguProvider: connect, disconnect, pull, createTask, updateTask
-    mockProvider.ts         Sample Tengu in this browser, with scripted teammate changes
-    mapping.ts              Tengu task ↔ app task, and merging a pull into local tasks
-    types.ts                Tengu-shaped data
-    index.ts                Which provider the app uses (swap it here)
-  lib/
-    parse.ts                Quick-add understanding (dates, project names, "!")
-    focus.ts                "Pick my focus" scoring (overdue, due soon, priority, project balance)
-    mochi.ts                Mochi's moods and lines
-    rewards.ts              Stars, unlock thresholds, levels
-    selectors.ts, dates.ts, due.ts
-  store/store.tsx           State, persistence, actions
-  components/               Mochi, Room (+ RoomItems art), TaskRow, QuickAdd, TaskDetail, Plate, Chrome (nav, toasts, confetti)
-  screens/                  Today, Projects (+ detail), MyTasks, LittleThings, Rewards
+  types.ts                  Member, Team, Project (+ milestones), Task, Activity
+  data/seed.ts              Sample workspace (dates relative to today)
+  integrations/tengu/       provider.ts · mockProvider.ts · mapping.ts · types.ts · index.ts (swap provider here)
+  lib/                      selectors · focus (Up next ranking) · parse (composer words) · dates · due
+  store/store.tsx
+  components/               Shell (sidebar, HUD, dock, toasts, level-up) · Composer · TaskPanel · TaskRow
+                            FocusMode · Settings · Mosaic · ActivityLine · ui (avatars, status, rings, Mochi orb)
+  screens/                  Today · MyWork · Projects · Team · Activity
 ```
 
-The UI never talks to Tengu. Writes to Tengu tasks go through the store to the provider. If
-Tengu can't be reached, they're queued and sent on the next sync.
+The UI never talks to Tengu. Writes to Tengu tasks (status, owner, title, due date, priority) go
+through the store to the provider; if Tengu can't be reached they're queued and sent on the
+next sync.
 
 ### Connecting real Tengu
 
 The prototype uses `MockTenguProvider`. No real Tengu account or API is called. To connect it,
-write a class that implements `TenguProvider` and export it from `integrations/tengu/index.ts`.
+implement `TenguProvider` and export it from `integrations/tengu/index.ts`.
 
-The sibling Product HQ app in this repo already reads Tengu through the **Tengu OS** connector
+The Product HQ app in this repo already reads Tengu through the **Tengu OS** connector
 (see [`docs/TENGU_INTEGRATION.md`](../docs/TENGU_INTEGRATION.md)). The same tools map onto this
 interface:
 
 | TenguProvider | Tengu OS tool |
 |---|---|
-| `pull()` | `list_lists` (spaces) + `list_tasks` per list, filtered to me |
+| `pull()` | `list_lists` (spaces, status roles) + `list_tasks` per list |
 | `createTask()` | `create_task` |
-| `updateTask()` | `update_task` (`done` → the list's done-role status) |
+| `updateTask()` | `update_task` (status by role → the list's own status name; one assignee) |
 
-When published as an Artifact, the page would declare the `mcp` capability for those tools, so
-each person's calls run with their own Tengu connection and the page never holds a token.
-Note `update_task`/`create_task` are writes signed by the user, so they'd need that permission.
+Mochi only reads status **roles** (available, started, review, blocked, done), never list-specific
+status names, which matches how Tengu describes its lists. Owners are matched to members by name.
 
 ## Design notes
 
-- Light theme on purpose: blush paper, plum ink, pink/lilac/peach accents, a touch of cherry for
-  overdue. Fredoka for headings, M PLUS Rounded 1c for text, Instrument Serif italic for the name.
-- Rail on desktop, bottom bar under 900px, Mochi's room beside Today on wide screens and above
-  it on narrower ones.
-- All motion is CSS and turns off under `prefers-reduced-motion` (confetti is skipped entirely).
+- Light theme by choice. Warm white ground, one inset white canvas, charcoal type.
+  Accents only mark projects (FIJI pink, Dosify violet, Personal green), people, status and data.
+- Geist for the interface, Geist Mono for metadata, keys, times and numbers.
+- Motion: rows slide in, completion sweeps and draws the check, numbers count, bars and rings
+  fill, the composer card launches into the list. All of it is off under `prefers-reduced-motion`.
+- Mochi is now a small abstract orb. It shows up in focus mode, level-ups, empty states and
+  your profile, never as a permanent panel.

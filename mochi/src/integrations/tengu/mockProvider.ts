@@ -1,66 +1,59 @@
 /**
  * MockTenguProvider: a pretend Tengu that lives in this browser.
- * It starts with the same Tengu tasks the seed data shows, accepts writes, and plays back a few
- * scripted "teammate" changes on the first syncs so "Sync now" visibly does something.
+ * It starts with the same Tengu tasks as the sample workspace, accepts writes, and plays back a
+ * few scripted teammate changes on the first syncs so "Sync now" visibly does something.
  * No network calls are made.
  */
+import { SEED_MEMBERS, SEED_PROJECTS, seedTasks } from '../../data/seed';
 import { addDays, today } from '../../lib/dates';
+import { toTengu } from './mapping';
 import type { TenguProvider } from './provider';
 import { TenguProviderError } from './provider';
 import type { PullResult, TenguSpace, TenguTask, TenguTaskDraft, TenguTaskPatch } from './types';
 
-const STORAGE_KEY = 'mochi.mockTengu.v1';
-const LATENCY = 900;
+const STORAGE_KEY = 'mochi.mockTengu.v2';
+const LATENCY = 800;
 
 const SPACES: TenguSpace[] = [
   { id: 'space-fiji', name: 'FIJI' },
   { id: 'space-dosify', name: 'Dosify' },
 ];
+const PREFIX: Record<string, string> = { 'space-fiji': 'FIJI', 'space-dosify': 'DOS' };
+const STATUS_NAME = { available: 'To do', started: 'In progress', review: 'In review', blocked: 'Blocked', done: 'Done' } as const;
 
 interface MockState {
   connected: boolean;
   tasks: TenguTask[];
-  /** How many scripted batches have been played back. */
   played: number;
   nextNumber: Record<string, number>;
 }
 
 const iso = () => new Date().toISOString();
 
-function initialTasks(): TenguTask[] {
-  const t = today();
-  const mk = (id: string, key: string, title: string, spaceId: string, due: number, priority: TenguTask['priority'], done = false): TenguTask => ({
-    id, key, title, spaceId, status: done ? 'Done' : 'In progress', done, dueDate: addDays(t, due), priority, updatedAt: iso(),
-  });
-  return [
-    mk('tg-1042', 'FIJI-142', 'Review Buyer Profile', 'space-fiji', 0, 2),
-    mk('tg-1043', 'FIJI-145', 'Review Broker Fit', 'space-fiji', 0, 3, true),
-    mk('tg-1044', 'FIJI-151', 'Check staging', 'space-fiji', -1, 2),
-    mk('tg-2201', 'DOS-88', 'Review landing hero', 'space-dosify', 0, 3, true),
-    mk('tg-2202', 'DOS-91', 'Finish Community page', 'space-dosify', 0, 2),
-    mk('tg-2203', 'DOS-92', 'Mobile hero', 'space-dosify', 0, 3),
-    mk('tg-2204', 'DOS-95', 'Pricing section', 'space-dosify', 2, 3),
-    mk('tg-2205', 'DOS-97', 'FAQ', 'space-dosify', 4, 4),
-  ];
+function initialState(): MockState {
+  const tasks = seedTasks()
+    .filter((t) => t.tengu)
+    .map((t) => toTengu(t, SEED_PROJECTS.find((p) => p.id === t.projectId)!.tenguSpaceId!, SEED_MEMBERS));
+  return { connected: true, tasks, played: 0, nextNumber: { 'space-fiji': 160, 'space-dosify': 101 } };
 }
 
 /** Scripted remote changes, one batch per sync. */
 const BATCHES: { apply: (s: MockState) => void; note: string }[] = [
   {
-    note: 'Bryan assigned you 2 new tasks',
+    note: 'Bryan assigned you 2 tasks',
     apply: (s) => {
       const t = today();
       s.tasks.push(
-        { id: 'tg-1058', key: 'FIJI-158', title: 'Reply to QA notes on Buyer Profile', spaceId: 'space-fiji', status: 'To do', done: false, dueDate: t, priority: 2, updatedAt: iso() },
-        { id: 'tg-2209', key: 'DOS-99', title: 'Final CTA', spaceId: 'space-dosify', status: 'To do', done: false, dueDate: addDays(t, 5), priority: 3, updatedAt: iso() },
+        { id: 'tg-FIJI-158', key: 'FIJI-158', title: 'Reply to QA notes on Buyer Profile', spaceId: 'space-fiji', status: 'To do', statusRole: 'available', assignee: 'Maria', dueDate: t, priority: 2, updatedAt: iso() },
+        { id: 'tg-DOS-99', key: 'DOS-99', title: 'Approve Final CTA copy', spaceId: 'space-dosify', status: 'To do', statusRole: 'available', assignee: 'Maria', dueDate: addDays(t, 2), priority: 3, updatedAt: iso() },
       );
     },
   },
   {
-    note: 'Ana finished “FAQ” in Tengu',
+    note: 'Natalia started “FAQ”',
     apply: (s) => {
-      const faq = s.tasks.find((x) => x.id === 'tg-2205');
-      if (faq && !faq.done) Object.assign(faq, { done: true, status: 'Done', updatedAt: iso() });
+      const faq = s.tasks.find((x) => x.id === 'tg-DOS-97');
+      if (faq && faq.statusRole === 'available') Object.assign(faq, { statusRole: 'started', status: 'In progress', updatedAt: iso() });
     },
   },
 ];
@@ -71,16 +64,12 @@ export class MockTenguProvider implements TenguProvider {
   private state: MockState;
 
   constructor() {
-    this.state = this.load() ?? { connected: true, tasks: initialTasks(), played: 0, nextNumber: { 'space-fiji': 160, 'space-dosify': 101 } };
+    this.state = this.load() ?? initialState();
   }
 
   reset() {
-    this.state = { connected: true, tasks: initialTasks(), played: 0, nextNumber: { 'space-fiji': 160, 'space-dosify': 101 } };
+    this.state = initialState();
     this.save();
-  }
-
-  get connected() {
-    return this.state.connected;
   }
 
   async connect() {
@@ -90,7 +79,7 @@ export class MockTenguProvider implements TenguProvider {
   }
 
   async disconnect() {
-    await wait(250);
+    await wait(200);
     this.state.connected = false;
     this.save();
   }
@@ -112,23 +101,25 @@ export class MockTenguProvider implements TenguProvider {
   async createTask(d: TenguTaskDraft): Promise<TenguTask> {
     await wait(LATENCY);
     this.requireConnected();
-    const space = SPACES.find((s) => s.id === d.spaceId);
-    if (!space) throw new TenguProviderError('That project isn’t in Tengu.', 'not_found');
+    if (!SPACES.some((s) => s.id === d.spaceId)) throw new TenguProviderError('That project isn’t in Tengu.', 'not_found');
     const n = this.state.nextNumber[d.spaceId]++;
-    const prefix = space.name === 'Dosify' ? 'DOS' : space.name.toUpperCase();
-    const task: TenguTask = { id: `tg-${d.spaceId}-${n}`, key: `${prefix}-${n}`, title: d.title, spaceId: d.spaceId, status: 'To do', done: false, dueDate: d.dueDate, priority: d.priority, updatedAt: iso() };
+    const key = `${PREFIX[d.spaceId]}-${n}`;
+    const task: TenguTask = {
+      id: `tg-${key}`, key, title: d.title, spaceId: d.spaceId, status: STATUS_NAME[d.statusRole], statusRole: d.statusRole,
+      assignee: d.assignee, dueDate: d.dueDate, priority: d.priority, updatedAt: iso(),
+    };
     this.state.tasks.push(task);
     this.save();
     return { ...task };
   }
 
   async updateTask(id: string, patch: TenguTaskPatch): Promise<TenguTask> {
-    await wait(350);
+    await wait(300);
     this.requireConnected();
     const task = this.state.tasks.find((t) => t.id === id);
     if (!task) throw new TenguProviderError('That task isn’t in Tengu anymore.', 'not_found');
     Object.assign(task, patch, { updatedAt: iso() });
-    if (patch.done !== undefined) task.status = patch.done ? 'Done' : 'In progress';
+    if (patch.statusRole) task.status = STATUS_NAME[patch.statusRole];
     this.save();
     return { ...task };
   }

@@ -1,73 +1,101 @@
 /**
- * App state + actions. Persisted state (tasks, projects, character, Tengu connection) is saved
- * to this browser. Side effects (Tengu writes, Mochi's reactions, toasts, confetti) live in the
- * actions so components stay simple.
+ * App state + actions. Persisted state (workspace, tasks, activity, XP, Tengu connection) is saved
+ * to this browser. Side effects (Tengu writes, activity, XP, toasts, level-ups) live in the actions
+ * so components stay simple. Every action is performed as `me`, the member using the app.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { seedCharacter, SEED_PROJECTS, seedTasks } from '../data/seed';
+import { SEED_MEMBERS, SEED_PROJECTS, SEED_TEAMS, SEED_XP, seedActivity, seedTasks } from '../data/seed';
 import { tengu } from '../integrations/tengu';
-import { mergePull, projectForSpace, toTenguPriority } from '../integrations/tengu/mapping';
+import { memberByName, mergePull, toTenguPriority, toTenguRole } from '../integrations/tengu/mapping';
 import type { TenguTaskPatch } from '../integrations/tengu/types';
-import { today } from '../lib/dates';
-import { reactionSpeech, type Reaction, type Speech } from '../lib/mochi';
-import { newlyUnlocked, rewardById, STARS_PER_TASK } from '../lib/rewards';
-import { completedToday, projectStats, todayTasks } from '../lib/selectors';
-import type { Character, Priority, Project, RewardId, Task, TenguConnection, View, Wallpaper } from '../types';
+import { dueLabel, today } from '../lib/dates';
+import {
+  doneToday, isDone, levelOf, projectLevel, projectStats, STATUS_LABEL, todayFor, visibleProjects, visibleTasks, XP_PER_CREATE, XP_PER_TASK,
+} from '../lib/selectors';
+import type { Activity, ActivityVerb, Member, Priority, Project, Status, Task, Team, TenguConnection, View } from '../types';
 
 export interface AppState {
-  version: 1;
+  version: 2;
+  me: string;
+  teamId: string;
+  members: Member[];
+  teams: Team[];
   projects: Project[];
   tasks: Task[];
-  character: Character;
+  activity: Activity[];
+  xp: Record<string, number>;
+  /** Milestones reached per project, so a level-up is announced once. */
+  projectLevels: Record<string, number>;
   tengu: TenguConnection;
-  /** Tengu tasks the user removed from the app (they stay in Tengu). */
   hiddenTenguIds: string[];
-  /** Changes to Tengu tasks made while Tengu couldn't be reached; sent on the next sync. */
   pendingTengu: Record<string, TenguTaskPatch>;
-  focus: { date: string; ids: string[] } | null;
+  /** How many scripted teammate events have played. */
+  scriptPlayed: number;
 }
 
 export interface Toast {
   id: number;
-  text: string;
-  tone?: 'stars' | 'plain' | 'unlock';
+  title: string;
+  detail?: string;
+  xp?: number;
+  tone?: 'plain' | 'success' | 'level';
   action?: { label: string; run: () => void };
+}
+
+export interface LevelUp {
+  key: number;
+  kind: 'user' | 'project';
+  title: string;
+  detail: string;
+  color?: string;
 }
 
 export interface UiState {
   view: View;
-  speech: (Speech & { key: number }) | null;
-  bounce: number;
-  confetti: number;
-  starBump: { key: number; delta: number };
   toasts: Toast[];
   openTaskId: string | null;
-  quickAdd: { open: boolean; projectId?: string };
-  plateOpen: boolean;
-  /** Task ids added in the last moment, for the spring-in animation. */
+  composer: { open: boolean; preset?: Partial<Pick<Task, 'projectId' | 'assigneeId' | 'dueDate'>> };
+  focus: { ids: string[]; index: number } | null;
+  settingsOpen: boolean;
+  dragTaskId: string | null;
+  xpBump: { key: number; delta: number };
+  levelUp: LevelUp | null;
+  /** Ids that just appeared (tasks or activity) for enter animations. */
   fresh: string[];
 }
 
 export interface NewTask {
   title: string;
   projectId: string;
+  assigneeId: string;
   dueDate: string | null;
+  time: string | null;
   priority: Priority;
-  toTengu: boolean;
+  /** Create it in Tengu so the team sees it. Otherwise it stays private. */
+  share: boolean;
 }
 
-const STORAGE_KEY = 'mochi.v1';
+export type TaskPatch = Partial<Pick<Task, 'title' | 'projectId' | 'assigneeId' | 'dueDate' | 'time' | 'priority' | 'notes'>>;
+
+const STORAGE_KEY = 'mochi.v2';
 
 function seedState(): AppState {
+  const tasks = seedTasks();
   return {
-    version: 1,
+    version: 2,
+    me: 'maria',
+    teamId: 'all',
+    members: SEED_MEMBERS,
+    teams: SEED_TEAMS,
     projects: SEED_PROJECTS,
-    tasks: seedTasks(),
-    character: seedCharacter(),
+    tasks,
+    activity: seedActivity(),
+    xp: { ...SEED_XP },
+    projectLevels: Object.fromEntries(SEED_PROJECTS.map((p) => [p.id, projectLevel(p, projectStats(p.id, tasks).pct)])),
     tengu: { connected: true, lastSyncedAt: new Date(Date.now() - 2 * 60_000).toISOString(), syncing: false },
     hiddenTenguIds: [],
     pendingTengu: {},
-    focus: null,
+    scriptPlayed: 0,
   };
 }
 
@@ -76,23 +104,31 @@ function loadState(): AppState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const s = JSON.parse(raw) as AppState;
-      if (s.version === 1 && Array.isArray(s.tasks)) return { ...s, tengu: { ...s.tengu, syncing: false } };
+      if (s.version === 2 && Array.isArray(s.tasks)) return { ...s, tengu: { ...s.tengu, syncing: false } };
     }
   } catch {
-    /* fall through to the sample data */
+    /* fall through to the sample workspace */
   }
   return seedState();
 }
 
-const VIEW_NAMES = ['today', 'projects', 'mine', 'little', 'rewards'] as const;
+const VIEWS = ['today', 'work', 'projects', 'team', 'activity'] as const;
 function viewFromHash(): View {
   const h = typeof location !== 'undefined' ? location.hash.slice(1) : '';
   if (h.startsWith('project-')) return { name: 'project', id: h.slice(8) };
-  return (VIEW_NAMES as readonly string[]).includes(h) ? { name: h as (typeof VIEW_NAMES)[number] } : { name: 'today' };
+  return (VIEWS as readonly string[]).includes(h) ? { name: h as (typeof VIEWS)[number] } : { name: 'today' };
 }
 const hashOf = (v: View) => (v.name === 'project' ? `project-${v.id}` : v.name);
+const uid = (p: string) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
-const uid = () => `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+/** Teammates "working" while the app is open: one change every ~40s, then quiet. */
+const SCRIPT: { actorId: string; taskId: string; to: Status }[] = [
+  { actorId: 'bryan', taskId: 't-fiji-6', to: 'done' },
+  { actorId: 'malika', taskId: 't-dos-7', to: 'review' },
+  { actorId: 'bryan', taskId: 't-dos-8', to: 'progress' },
+  { actorId: 'malika', taskId: 't-dos-3', to: 'done' },
+  { actorId: 'natalia', taskId: 't-fiji-8', to: 'progress' },
+];
 
 type Ctx = ReturnType<typeof useBuildStore>;
 const StoreContext = createContext<Ctx | null>(null);
@@ -112,22 +148,20 @@ function useBuildStore() {
   const [state, setState] = useState<AppState>(loadState);
   const [ui, setUi] = useState<UiState>(() => ({
     view: viewFromHash(),
-    speech: null,
-    bounce: 0,
-    confetti: 0,
-    starBump: { key: 0, delta: 0 },
     toasts: [],
     openTaskId: null,
-    quickAdd: { open: false },
-    plateOpen: false,
+    composer: { open: false },
+    focus: null,
+    settingsOpen: false,
+    dragTaskId: null,
+    xpBump: { key: 0, delta: 0 },
+    levelUp: null,
     fresh: [],
   }));
   const stateRef = useRef(state);
   stateRef.current = state;
-  const speechTimer = useRef<number>();
   const toastId = useRef(0);
 
-  // Persist
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -136,13 +170,25 @@ function useBuildStore() {
     }
   }, [state]);
 
-  // Hash ↔ view
   useEffect(() => {
     const onHash = () => setUi((u) => ({ ...u, view: viewFromHash() }));
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // ───────────── Derived for the current person + team ─────────────
+  const team = state.teams.find((t) => t.id === state.teamId) ?? state.teams[0];
+  const projects = useMemo(() => visibleProjects(state.projects, team, state.me), [state.projects, team, state.me]);
+  const tasks = useMemo(() => visibleTasks(state.tasks, projects, state.me), [state.tasks, projects, state.me]);
+  const members = useMemo(() => state.members.filter((m) => team.memberIds.includes(m.id)), [state.members, team]);
+  const activity = useMemo(() => {
+    const ids = new Set(projects.map((p) => p.id));
+    const priv = new Set(state.tasks.filter((t) => t.source === 'personal' && t.createdBy !== state.me).map((t) => t.id));
+    return state.activity.filter((a) => ids.has(a.projectId) && !(a.taskId && priv.has(a.taskId)));
+  }, [state.activity, state.tasks, projects, state.me]);
+  const me = state.members.find((m) => m.id === state.me)!;
+
+  // ───────────── UI helpers ─────────────
   const navigate = useCallback((view: View) => {
     setUi((u) => ({ ...u, view, openTaskId: null }));
     try {
@@ -150,163 +196,204 @@ function useBuildStore() {
     } catch {
       /* sandboxed frame: navigation still works in-app */
     }
-    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    window.scrollTo({ top: 0 });
   }, []);
-
-  const say = useCallback((speech: Speech, ms = 4800) => {
-    window.clearTimeout(speechTimer.current);
-    setUi((u) => ({ ...u, speech: { ...speech, key: Date.now() }, bounce: u.bounce + 1 }));
-    speechTimer.current = window.setTimeout(() => setUi((u) => ({ ...u, speech: null })), ms);
-  }, []);
-
-  const react = useCallback((r: Reaction, detail?: string) => say(reactionSpeech(r, detail)), [say]);
 
   const toast = useCallback((t: Omit<Toast, 'id'>) => {
     const id = ++toastId.current;
     setUi((u) => ({ ...u, toasts: [...u.toasts.slice(-2), { ...t, id }] }));
-    window.setTimeout(() => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), t.action ? 6000 : 3600);
+    window.setTimeout(() => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), t.action ? 5500 : 3200);
   }, []);
-
   const dismissToast = useCallback((id: number) => setUi((u) => ({ ...u, toasts: u.toasts.filter((x) => x.id !== id) })), []);
-
-  const celebrate = useCallback(() => setUi((u) => ({ ...u, confetti: u.confetti + 1 })), []);
 
   const markFresh = useCallback((ids: string[]) => {
     setUi((u) => ({ ...u, fresh: [...u.fresh, ...ids] }));
-    window.setTimeout(() => setUi((u) => ({ ...u, fresh: u.fresh.filter((x) => !ids.includes(x)) })), 900);
+    window.setTimeout(() => setUi((u) => ({ ...u, fresh: u.fresh.filter((x) => !ids.includes(x)) })), 1200);
   }, []);
+
+  const showLevelUp = useCallback((l: Omit<LevelUp, 'key'>) => {
+    const key = Date.now();
+    setUi((u) => ({ ...u, levelUp: { ...l, key } }));
+    window.setTimeout(() => setUi((u) => (u.levelUp?.key === key ? { ...u, levelUp: null } : u)), 4200);
+  }, []);
+
+  const log = (s: AppState, actorId: string, verb: ActivityVerb, task: Task, detail?: string): Activity[] => {
+    const a: Activity = { id: uid('a'), actorId, verb, taskId: task.id, taskTitle: task.title, projectId: task.projectId, detail, at: new Date().toISOString() };
+    markFresh([a.id]);
+    return [a, ...s.activity].slice(0, 300);
+  };
 
   /** Write a Tengu-owned change; if Tengu can't be reached, queue it for the next sync. */
   const writeTengu = useCallback((tenguId: string, patch: TenguTaskPatch) => {
-    const queue = () =>
-      setState((s) => ({ ...s, pendingTengu: { ...s.pendingTengu, [tenguId]: { ...s.pendingTengu[tenguId], ...patch } } }));
+    const queue = () => setState((s) => ({ ...s, pendingTengu: { ...s.pendingTengu, [tenguId]: { ...s.pendingTengu[tenguId], ...patch } } }));
     if (!stateRef.current.tengu.connected) return queue();
     tengu.updateTask(tenguId, patch).catch(queue);
   }, []);
 
+  /** After tasks change: announce project milestones reached, and keep the stored levels in step. */
+  const checkProjectLevels = (s: AppState, tasks: Task[], projectIds: string[], announce: boolean) => {
+    const levels = { ...s.projectLevels };
+    for (const pid of projectIds) {
+      const p = s.projects.find((x) => x.id === pid);
+      if (!p) continue;
+      const lvl = projectLevel(p, projectStats(pid, tasks).pct);
+      if (announce && lvl > (levels[pid] ?? 0)) {
+        const m = p.milestones[lvl - 1];
+        showLevelUp({ kind: 'project', title: `${p.name} · Level ${lvl}`, detail: lvl === p.milestones.length ? `${m.name}. Every task is done.` : `Milestone reached: ${m.name}`, color: p.color });
+      }
+      levels[pid] = lvl;
+    }
+    return levels;
+  };
+
   // ───────────── Tasks ─────────────
 
-  const toggleTask = useCallback(
-    (id: string) => {
+  const setStatus = useCallback(
+    (id: string, status: Status, opts: { quiet?: boolean } = {}) => {
+      const s = stateRef.current;
+      const task = s.tasks.find((t) => t.id === id);
+      if (!task || task.status === status) return;
+      const wasDone = isDone(task);
+      const nowDone = status === 'done';
+      const updated: Task = { ...task, status, completedAt: nowDone ? new Date().toISOString() : wasDone ? null : task.completedAt };
+      const tasks = s.tasks.map((t) => (t.id === id ? updated : t));
+      const xpDelta = nowDone && !wasDone ? XP_PER_TASK : wasDone && !nowDone ? -XP_PER_TASK : 0;
+      const xpBefore = s.xp[s.me] ?? 0;
+      const xp = { ...s.xp, [s.me]: Math.max(0, xpBefore + xpDelta) };
+      const verb: ActivityVerb = nowDone ? 'completed' : wasDone ? 'reopened' : 'moved';
+      const activity = log(s, s.me, verb, updated, verb === 'moved' ? `→ ${STATUS_LABEL[status]}` : undefined);
+      const projectLevels = checkProjectLevels(s, tasks, [task.projectId], nowDone);
+      setState({ ...s, tasks, xp, activity, projectLevels });
+      if (xpDelta) setUi((u) => ({ ...u, xpBump: { key: u.xpBump.key + 1, delta: xpDelta } }));
+      if (task.tengu) writeTengu(task.tengu.id, { statusRole: toTenguRole(status) });
+
+      if (nowDone && levelOf(xp[s.me]) > levelOf(xpBefore)) {
+        showLevelUp({ kind: 'user', title: `Level ${levelOf(xp[s.me])}`, detail: `${xp[s.me].toLocaleString()} XP. You're on a roll.` });
+      }
+      if (opts.quiet) return;
+      if (nowDone) {
+        const mineToday = todayFor(tasks, s.me);
+        const left = mineToday.filter((t) => !isDone(t)).length;
+        const doneCount = tasks.filter((t) => t.assigneeId === s.me && doneToday(t)).length;
+        const title = left === 0 && mineToday.length > 0 ? 'Clean sweep. Today’s done.' : doneCount === 3 ? 'You’re on a roll.' : 'Nice. That’s done.';
+        toast({
+          tone: 'success', title, detail: task.title, xp: XP_PER_TASK,
+          action: { label: 'Undo', run: () => setStatusRef.current(id, task.status, { quiet: true }) },
+        });
+      } else if (verb === 'moved') {
+        toast({ title: `Moved to ${STATUS_LABEL[status]}`, detail: task.title });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [toast, writeTengu, showLevelUp],
+  );
+  const setStatusRef = useRef(setStatus);
+  setStatusRef.current = setStatus;
+
+  const toggleDone = useCallback((id: string) => {
+    const t = stateRef.current.tasks.find((x) => x.id === id);
+    if (t) setStatus(id, isDone(t) ? 'todo' : 'done');
+  }, [setStatus]);
+
+  const updateTask = useCallback(
+    (id: string, patch: TaskPatch, opts: { announce?: boolean } = {}) => {
       const s = stateRef.current;
       const task = s.tasks.find((t) => t.id === id);
       if (!task) return;
-      const completed = !task.completed;
-      const tasks = s.tasks.map((t) => (t.id === id ? { ...t, completed, completedAt: completed ? new Date().toISOString() : null } : t));
-      const delta = completed ? STARS_PER_TASK : -STARS_PER_TASK;
-      const stars = Math.max(0, s.character.stars + delta);
-      let unlocked = s.character.unlockedItems;
-      let placed = s.character.placedItems;
-      const gained: RewardId[] = completed ? newlyUnlocked(stars, unlocked) : [];
-
-      // Finishing a whole project
-      const project = s.projects.find((p) => p.id === task.projectId)!;
-      const before = projectStats(project, s.tasks);
-      const after = projectStats(project, tasks);
-      const projectDone = completed && after.total > 0 && after.open === 0 && before.open > 0;
-      if (projectDone && !unlocked.includes('disco')) gained.push('disco');
-      if (gained.length) {
-        unlocked = [...unlocked, ...gained];
-        placed = [...placed, ...gained];
-      }
-
-      setState({ ...s, tasks, character: { ...s.character, stars, unlockedItems: unlocked, placedItems: placed } });
-      setUi((u) => ({ ...u, starBump: { key: u.starBump.key + 1, delta } }));
-      if (task.tengu) writeTengu(task.tengu.id, { done: completed });
-
-      if (!completed) {
-        react('uncomplete');
+      if (patch.projectId && patch.projectId !== task.projectId && task.tengu) {
+        toast({ title: 'Tengu tasks stay in their project', detail: `${task.tengu.key} lives in ${s.projects.find((p) => p.id === task.projectId)?.name}` });
         return;
       }
-      const todayOpen = todayTasks(tasks).filter((t) => !t.completed).length;
-      const doneToday = completedToday(tasks);
-      const wasOnToday = todayTasks(s.tasks).some((t) => t.id === id);
-      if (projectDone) {
-        react('projectDone', project.name);
-        celebrate();
-      } else if (wasOnToday && todayOpen === 0) {
-        react('allDone');
-        celebrate();
-      } else if (doneToday === 5) {
-        react('streak5');
-        celebrate();
-      } else if (doneToday === 3) {
-        react('streak3');
-      } else if (gained.length) {
-        react('unlock', rewardById(gained[0]).name.toLowerCase());
-      } else {
-        react('complete');
+      const updated = { ...task, ...patch };
+      let activity = s.activity;
+      let note = '';
+      if (patch.assigneeId && patch.assigneeId !== task.assigneeId) {
+        const who = s.members.find((m) => m.id === patch.assigneeId)!.name;
+        activity = log({ ...s, activity }, s.me, 'assigned', updated, `→ ${who}`);
+        note = `Assigned to ${who}`;
       }
-      toast({ tone: 'stars', text: `+${STARS_PER_TASK} ✦  ${task.title}` });
-      for (const g of gained) toast({ tone: 'unlock', text: `Unlocked for your room: ${rewardById(g).name}` });
+      if (patch.dueDate !== undefined && patch.dueDate !== task.dueDate) {
+        activity = log({ ...s, activity }, s.me, 'scheduled', updated, `→ ${dueLabel(patch.dueDate)}`);
+        note = `Due ${dueLabel(patch.dueDate).toLowerCase()}`;
+      }
+      if (patch.projectId && patch.projectId !== task.projectId) {
+        const pn = s.projects.find((p) => p.id === patch.projectId)!.name;
+        activity = log({ ...s, activity }, s.me, 'moved', updated, `→ ${pn}`);
+        note = `Moved to ${pn}`;
+      }
+      const tasks = s.tasks.map((t) => (t.id === id ? updated : t));
+      setState({ ...s, tasks, activity, projectLevels: checkProjectLevels(s, tasks, [task.projectId, updated.projectId], false) });
+      if (opts.announce && note) toast({ title: note, detail: task.title });
+      if (task.tengu) {
+        const tp: TenguTaskPatch = {};
+        if (patch.title !== undefined) tp.title = patch.title;
+        if (patch.dueDate !== undefined) tp.dueDate = patch.dueDate;
+        if (patch.priority !== undefined) tp.priority = toTenguPriority(patch.priority);
+        if (patch.assigneeId !== undefined) tp.assignee = s.members.find((m) => m.id === patch.assigneeId)?.name ?? null;
+        if (Object.keys(tp).length) writeTengu(task.tengu.id, tp);
+      }
     },
-    [react, celebrate, toast, writeTengu],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [toast, writeTengu],
   );
 
-  /** Personal task → Tengu task. Only for projects that live in Tengu. */
-  const sendToTengu = useCallback(
+  /** Private task → Tengu task, visible to the team. */
+  const shareToTengu = useCallback(
     async (id: string, given?: Task) => {
       const s = stateRef.current;
       const task = given ?? s.tasks.find((t) => t.id === id);
       const project = task && s.projects.find((p) => p.id === task.projectId);
       if (!task || !project?.tenguSpaceId) return;
       if (!s.tengu.connected) {
-        toast({ text: 'Connect Tengu first (Little Things → Tengu)' });
+        toast({ title: 'Tengu isn’t connected', detail: 'Connect it in Settings to share tasks.' });
         return;
       }
       try {
-        const created = await tengu.createTask({ spaceId: project.tenguSpaceId, title: task.title, dueDate: task.dueDate, priority: toTenguPriority(task.priority) });
-        setState((cur) => ({
-          ...cur,
-          tasks: cur.tasks.map((t) => (t.id === id ? { ...t, source: 'tengu', tengu: { id: created.id, key: created.key } } : t)),
-        }));
-        react('tenguAdded', created.key);
-        toast({ text: `Added to Tengu as ${created.key}` });
+        const created = await tengu.createTask({
+          spaceId: project.tenguSpaceId,
+          title: task.title,
+          assignee: s.members.find((m) => m.id === task.assigneeId)?.name ?? null,
+          dueDate: task.dueDate,
+          priority: toTenguPriority(task.priority),
+          statusRole: toTenguRole(task.status),
+        });
+        setState((cur) => ({ ...cur, tasks: cur.tasks.map((t) => (t.id === id ? { ...t, source: 'tengu', tengu: { id: created.id, key: created.key } } : t)) }));
+        toast({ title: `Shared to Tengu as ${created.key}`, detail: 'The team can see it now.' });
       } catch (e) {
-        toast({ text: `Couldn’t add to Tengu: ${(e as Error).message} It’s saved as your task.` });
+        toast({ title: 'Couldn’t share to Tengu', detail: `${(e as Error).message} It stays private for now.` });
       }
     },
-    [react, toast],
+    [toast],
   );
 
-  const addTask = useCallback(
-    (n: NewTask) => {
+  const createTask = useCallback(
+    (n: NewTask): Task => {
       const s = stateRef.current;
       const task: Task = {
-        id: uid(),
+        id: uid('t'),
         title: n.title.trim(),
         projectId: n.projectId,
         source: 'personal',
-        completed: false,
+        status: 'todo',
+        assigneeId: n.assigneeId,
+        createdBy: s.me,
         dueDate: n.dueDate,
+        time: n.time,
         priority: n.priority,
         createdAt: new Date().toISOString(),
         completedAt: null,
       };
-      setState({ ...s, tasks: [...s.tasks, task] });
+      const tasks = [...s.tasks, task];
+      const xp = { ...s.xp, [s.me]: (s.xp[s.me] ?? 0) + XP_PER_CREATE };
+      setState({ ...s, tasks, xp, activity: log(s, s.me, 'created', task), projectLevels: checkProjectLevels(s, tasks, [task.projectId], false) });
+      setUi((u) => ({ ...u, xpBump: { key: u.xpBump.key + 1, delta: XP_PER_CREATE } }));
       markFresh([task.id]);
-      react('add');
-      if (n.toTengu) sendToTengu(task.id, task);
-      else toast({ text: `Added “${task.title}”` });
+      const project = s.projects.find((p) => p.id === task.projectId)!;
+      if (n.share && project.tenguSpaceId) shareToTengu(task.id, task);
+      return task;
     },
-    [react, toast, markFresh, sendToTengu],
-  );
-
-  const updateTask = useCallback(
-    (id: string, patch: Partial<Pick<Task, 'title' | 'projectId' | 'dueDate' | 'priority' | 'notes'>>) => {
-      const s = stateRef.current;
-      const task = s.tasks.find((t) => t.id === id);
-      if (!task) return;
-      setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) });
-      if (task.tengu) {
-        const tp: TenguTaskPatch = {};
-        if (patch.title !== undefined) tp.title = patch.title;
-        if (patch.dueDate !== undefined) tp.dueDate = patch.dueDate;
-        if (patch.priority !== undefined) tp.priority = toTenguPriority(patch.priority);
-        if (Object.keys(tp).length) writeTengu(task.tengu.id, tp);
-      }
-    },
-    [writeTengu],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [markFresh, shareToTengu],
   );
 
   const deleteTask = useCallback(
@@ -315,15 +402,11 @@ function useBuildStore() {
       const idx = s.tasks.findIndex((t) => t.id === id);
       if (idx < 0) return;
       const task = s.tasks[idx];
-      setState({
-        ...s,
-        tasks: s.tasks.filter((t) => t.id !== id),
-        hiddenTenguIds: task.tengu ? [...s.hiddenTenguIds, task.tengu.id] : s.hiddenTenguIds,
-      });
+      setState({ ...s, tasks: s.tasks.filter((t) => t.id !== id), hiddenTenguIds: task.tengu ? [...s.hiddenTenguIds, task.tengu.id] : s.hiddenTenguIds });
       setUi((u) => ({ ...u, openTaskId: null }));
-      react('delete');
       toast({
-        text: task.tengu ? `Removed from Mochi (still in Tengu)` : `Deleted “${task.title}”`,
+        title: task.tengu ? 'Removed from Mochi' : 'Task deleted',
+        detail: task.tengu ? `${task.tengu.key} is still in Tengu.` : task.title,
         action: {
           label: 'Undo',
           run: () =>
@@ -335,7 +418,7 @@ function useBuildStore() {
         },
       });
     },
-    [react, toast],
+    [toast],
   );
 
   // ───────────── Tengu connection ─────────────
@@ -348,93 +431,120 @@ function useBuildStore() {
       for (const [tid, patch] of Object.entries(s.pendingTengu)) await tengu.updateTask(tid, patch).catch(() => undefined);
       const pull = await tengu.pull();
       const cur = stateRef.current;
-      const m = mergePull(cur.tasks, pull, cur.projects, cur.hiddenTenguIds);
-      const added = m.added;
-      const newIds = m.tasks.slice(cur.tasks.length).map((t) => t.id);
-      if (newIds.length) markFresh(newIds);
-      setState({ ...cur, tasks: m.tasks, pendingTengu: {}, tengu: { connected: true, syncing: false, lastSyncedAt: pull.syncedAt } });
-      const note = pull.notes?.[0];
-      if (added) react('syncedNew', `${added} new thing${added === 1 ? '' : 's'}`);
-      else react('synced');
-      toast({ text: note ? `Synced · ${note}` : 'Synced with Tengu · all caught up' });
+      const m = mergePull(cur.tasks, pull, cur.projects, cur.members, cur.hiddenTenguIds);
+      if (m.added.length) markFresh(m.added.map((t) => t.id));
+      const newActs: Activity[] = m.added.map((t) => {
+        const assigner = memberByName(cur.members, 'Bryan')?.id ?? t.assigneeId;
+        return { id: uid('a'), actorId: assigner, verb: 'assigned', taskId: t.id, taskTitle: t.title, projectId: t.projectId, detail: `→ ${cur.members.find((x) => x.id === t.assigneeId)?.name}`, at: pull.syncedAt };
+      });
+      for (const c of m.changed) {
+        if (c.before.status !== c.after.status) {
+          newActs.push({ id: uid('a'), actorId: c.after.assigneeId, verb: c.after.status === 'done' ? 'completed' : 'moved', taskId: c.after.id, taskTitle: c.after.title, projectId: c.after.projectId, detail: c.after.status === 'done' ? undefined : `→ ${STATUS_LABEL[c.after.status]}`, at: pull.syncedAt });
+        }
+      }
+      if (newActs.length) markFresh(newActs.map((a) => a.id));
+      setState({ ...cur, tasks: m.tasks, activity: [...newActs, ...cur.activity], pendingTengu: {}, tengu: { connected: true, syncing: false, lastSyncedAt: pull.syncedAt } });
+      toast({ title: 'Synced with Tengu', detail: pull.notes?.[0] ?? 'Everything is up to date.' });
     } catch (e) {
       setState((cur) => ({ ...cur, tengu: { ...cur.tengu, syncing: false } }));
-      toast({ text: `Sync didn’t work: ${(e as Error).message}` });
+      toast({ title: 'Sync didn’t work', detail: (e as Error).message });
     }
-  }, [react, toast, markFresh]);
+  }, [toast, markFresh]);
+  const syncRef = useRef(syncNow);
+  syncRef.current = syncNow;
 
   const connectTengu = useCallback(async () => {
     setState((cur) => ({ ...cur, tengu: { ...cur.tengu, syncing: true } }));
     await tengu.connect();
     setState((cur) => ({ ...cur, tengu: { ...cur.tengu, connected: true, syncing: false } }));
-    // Let the connected state land before syncing (syncNow reads the latest state).
-    window.setTimeout(() => syncNowRef.current(), 80);
+    window.setTimeout(() => syncRef.current(), 80);
   }, []);
 
   const disconnectTengu = useCallback(async () => {
     await tengu.disconnect();
     setState((cur) => ({ ...cur, tengu: { ...cur.tengu, connected: false, syncing: false } }));
-    toast({ text: 'Tengu disconnected. Your tasks stay right here.' });
+    toast({ title: 'Tengu disconnected', detail: 'Your tasks stay in Mochi. Changes are sent when you reconnect.' });
   }, [toast]);
 
-  const syncNowRef = useRef(syncNow);
-  syncNowRef.current = syncNow;
-
-  // Quiet background sync every 5 minutes while open.
+  // Quiet background sync every 5 minutes.
   useEffect(() => {
-    const t = window.setInterval(() => syncNowRef.current(), 5 * 60_000);
+    const t = window.setInterval(() => syncRef.current(), 5 * 60_000);
     return () => window.clearInterval(t);
   }, []);
 
-  // ───────────── Focus, room, misc ─────────────
-
-  const setFocus = useCallback(
-    (ids: string[]) => {
-      setState((cur) => ({ ...cur, focus: { date: today(), ids } }));
-      setUi((u) => ({ ...u, plateOpen: false }));
-      navigate({ name: 'today' });
-      react('focus');
-    },
-    [navigate, react],
-  );
-  const clearFocus = useCallback(() => setState((cur) => ({ ...cur, focus: null })), []);
-
-  const togglePlaced = useCallback((id: RewardId) => {
-    setState((cur) => {
-      const placed = cur.character.placedItems.includes(id)
-        ? cur.character.placedItems.filter((x) => x !== id)
-        : [...cur.character.placedItems, id];
-      return { ...cur, character: { ...cur.character, placedItems: placed } };
-    });
+  // Teammates at work: scripted, one change every ~40s while the page is visible.
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      if (document.hidden) return;
+      const s = stateRef.current;
+      const step = SCRIPT[s.scriptPlayed];
+      if (!step) return;
+      const task = s.tasks.find((x) => x.id === step.taskId);
+      if (!task || task.assigneeId === s.me || task.status === step.to || task.status === 'done') {
+        setState({ ...s, scriptPlayed: s.scriptPlayed + 1 });
+        return;
+      }
+      const updated: Task = { ...task, status: step.to, completedAt: step.to === 'done' ? new Date().toISOString() : null };
+      const tasks = s.tasks.map((x) => (x.id === task.id ? updated : x));
+      const verb: ActivityVerb = step.to === 'done' ? 'completed' : 'moved';
+      const a: Activity = { id: uid('a'), actorId: step.actorId, verb, taskId: task.id, taskTitle: task.title, projectId: task.projectId, detail: verb === 'moved' ? `→ ${STATUS_LABEL[step.to]}` : undefined, at: new Date().toISOString() };
+      markFresh([a.id]);
+      setState({
+        ...s,
+        tasks,
+        activity: [a, ...s.activity],
+        xp: verb === 'completed' ? { ...s.xp, [step.actorId]: (s.xp[step.actorId] ?? 0) + XP_PER_TASK } : s.xp,
+        projectLevels: checkProjectLevels(s, tasks, [task.projectId], false),
+        scriptPlayed: s.scriptPlayed + 1,
+      });
+    }, 40_000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setWallpaper = useCallback((wallpaper: Wallpaper) => setState((cur) => ({ ...cur, character: { ...cur.character, wallpaper } })), []);
-  const setName = useCallback((name: string) => setState((cur) => ({ ...cur, character: { ...cur.character, name } })), []);
+  // ───────────── Workspace, people, focus ─────────────
+
+  const setMe = useCallback((id: string) => {
+    setState((cur) => ({ ...cur, me: id }));
+    setUi((u) => ({ ...u, openTaskId: null, settingsOpen: false }));
+    const m = stateRef.current.members.find((x) => x.id === id);
+    toast({ title: `Signed in as ${m?.name}`, detail: 'Today and My Work now show their work.' });
+  }, [toast]);
+
+  const setTeam = useCallback((teamId: string) => setState((cur) => ({ ...cur, teamId })), []);
+
+  const startFocus = useCallback((ids: string[]) => ids.length && setUi((u) => ({ ...u, focus: { ids, index: 0 }, openTaskId: null })), []);
+  const nextFocus = useCallback(() => setUi((u) => (u.focus ? { ...u, focus: u.focus.index + 1 < u.focus.ids.length ? { ...u.focus, index: u.focus.index + 1 } : null } : u)), []);
+  const exitFocus = useCallback(() => setUi((u) => ({ ...u, focus: null })), []);
 
   const resetDemo = useCallback(() => {
     if ('reset' in tengu) (tengu as { reset(): void }).reset();
     setState(seedState());
-    setUi((u) => ({ ...u, speech: null, toasts: [], openTaskId: null }));
+    setUi((u) => ({ ...u, toasts: [], openTaskId: null, settingsOpen: false, focus: null }));
     navigate({ name: 'today' });
-    toast({ text: 'Fresh start with the sample tasks ♡' });
+    toast({ title: 'Workspace reset', detail: 'Back to the sample tasks.' });
   }, [navigate, toast]);
 
   const openTask = useCallback((id: string | null) => setUi((u) => ({ ...u, openTaskId: id })), []);
-  const openQuickAdd = useCallback((projectId?: string) => setUi((u) => ({ ...u, quickAdd: { open: true, projectId } })), []);
-  const closeQuickAdd = useCallback(() => setUi((u) => ({ ...u, quickAdd: { open: false } })), []);
-  const setPlateOpen = useCallback((plateOpen: boolean) => setUi((u) => ({ ...u, plateOpen })), []);
-
-  const projectOf = useCallback((id: string) => state.projects.find((p) => p.id === id) ?? state.projects[0], [state.projects]);
-  const tenguProjectFor = useCallback((spaceId: string) => projectForSpace(state.projects, spaceId), [state.projects]);
+  const openComposer = useCallback((preset?: UiState['composer']['preset']) => setUi((u) => ({ ...u, composer: { open: true, preset }, openTaskId: null })), []);
+  const closeComposer = useCallback(() => setUi((u) => ({ ...u, composer: { open: false } })), []);
+  const setSettings = useCallback((settingsOpen: boolean) => setUi((u) => ({ ...u, settingsOpen })), []);
+  const setDrag = useCallback((dragTaskId: string | null) => setUi((u) => ({ ...u, dragTaskId })), []);
 
   const actions = useMemo(
     () => ({
-      navigate, say, toast, dismissToast, toggleTask, addTask, updateTask, deleteTask, sendToTengu,
-      syncNow, connectTengu, disconnectTengu, setFocus, clearFocus, togglePlaced, setWallpaper, setName,
-      resetDemo, openTask, openQuickAdd, closeQuickAdd, setPlateOpen,
+      navigate, toast, dismissToast, setStatus, toggleDone, updateTask, createTask, deleteTask, shareToTengu,
+      syncNow, connectTengu, disconnectTengu, setMe, setTeam, startFocus, nextFocus, exitFocus, resetDemo,
+      openTask, openComposer, closeComposer, setSettings, setDrag,
     }),
-    [navigate, say, toast, dismissToast, toggleTask, addTask, updateTask, deleteTask, sendToTengu, syncNow, connectTengu, disconnectTengu, setFocus, clearFocus, togglePlaced, setWallpaper, setName, resetDemo, openTask, openQuickAdd, closeQuickAdd, setPlateOpen],
+    [navigate, toast, dismissToast, setStatus, toggleDone, updateTask, createTask, deleteTask, shareToTengu, syncNow, connectTengu, disconnectTengu, setMe, setTeam, startFocus, nextFocus, exitFocus, resetDemo, openTask, openComposer, closeComposer, setSettings, setDrag],
   );
 
-  return { state, ui, actions, projectOf, tenguProjectFor, providerLabel: tengu.label, providerKind: tengu.kind };
+  const memberOf = useCallback((id: string) => state.members.find((m) => m.id === id) ?? state.members[0], [state.members]);
+  const projectOf = useCallback((id: string) => state.projects.find((p) => p.id === id) ?? state.projects[0], [state.projects]);
+
+  return {
+    state, ui, actions, team, projects, tasks, members, activity, me, memberOf, projectOf,
+    providerLabel: tengu.label, providerKind: tengu.kind, today: today(),
+  };
 }

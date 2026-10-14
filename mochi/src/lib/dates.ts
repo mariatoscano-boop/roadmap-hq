@@ -83,3 +83,22 @@ export function greeting(d = new Date()): string {
   if (h < 22) return 'Good evening';
   return 'Hi, night owl';
 }
+
+/** "now", "4m", "2h", "3d" — compact, for feeds. */
+export function shortAgo(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return 'now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+/** Monday of the week containing `iso`. */
+export function startOfWeek(iso = today()): string {
+  const d = parseISO(iso).getDay();
+  return addDays(iso, d === 0 ? -6 : 1 - d);
+}
+
+export const localDayOf = (isoTime: string) => toISODate(new Date(isoTime));
